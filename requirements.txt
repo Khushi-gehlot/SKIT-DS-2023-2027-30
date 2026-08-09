@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+SpeechRecognition
+pyttsx3
+pyautogui
+keyboard
+psutil
+pygetwindow
+wikipedia
+requests
