@@ -4,6 +4,8 @@ from actions import (
     send_email_voice,
     search_google_voice,
     search_youtube_voice,
+    open_youtube,
+    open_google,
 
     # Scrolling / screen
     move_cursor_up,
@@ -108,6 +110,12 @@ COMMANDS = {
     "youtube search": search_youtube_voice,
 
     # ===================== BROWSER / WEB =====================
+
+    "open youtube": open_youtube,
+    "youtube": open_youtube,
+
+    "open google": open_google,
+    "google": open_google,
 
 
     # ================= CURSOR CONTROL =================

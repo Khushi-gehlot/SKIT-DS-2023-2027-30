@@ -48,13 +48,21 @@ def process_command(command_text: str) -> bool:
 
 
     if "search google for" in command_text:
-        search_google_voice(command_text)
+        query = command_text.split("search google for", 1)[1].strip()
+        if query:
+            search_google(query)
+        else:
+            search_google_voice()
         return True
 
     # ===== YOUTUBE SEARCH =====
 
     if "search youtube for" in command_text:
-        search_youtube_voice(command_text)
+        query = command_text.split("search youtube for", 1)[1].strip()
+        if query:
+            search_youtube(query)
+        else:
+            search_youtube_voice()
         return True
 
     if "open website" in command_text:
@@ -70,9 +78,12 @@ def process_command(command_text: str) -> bool:
         COMMANDS[command_text]()
         return True
 
-    for key, func in COMMANDS.items():
+    # Longest key first, so specific phrases win over the generic ones they
+    # contain. Without this, "settings" swallows "display settings", "click"
+    # swallows "double click", "music" swallows "play music", and so on.
+    for key in sorted(COMMANDS, key=len, reverse=True):
         if key in command_text:
-            func()
+            func = COMMANDS[key]
             return True
 
     speak("I do not recognize that command.")
