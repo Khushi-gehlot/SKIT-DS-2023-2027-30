@@ -79,6 +79,20 @@ def always_on_loop():
 
     speak("Always-on wake word listening started.")
 
+    try:
+        _always_on_body()
+    except Exception:
+        traceback.print_exc()
+        print("Always-on loop crashed; stopping.")
+    finally:
+        always_on_flag = False
+
+    speak("Always-on wake word listening stopped.")
+
+
+def _always_on_body():
+    global always_on_flag
+
     while always_on_flag:
         # 1) Wait for wake word
         speak("Listening for wake word.")
@@ -132,8 +146,6 @@ def always_on_loop():
             except Exception as e:
                 traceback.print_exc()
                 speak(f"Error while executing your command: {e}")
-
-    speak("Always-on wake word listening stopped.")
 
 
 # ----------------- Routes -----------------
@@ -264,7 +276,11 @@ def start_always_on():
     """
     global always_on_flag, always_on_thread
 
-    if always_on_flag:
+    # Guard on the thread itself, not just the flag: a stop/start pair (React
+    # StrictMode double-mounts in dev) can flip the flag while the old thread is
+    # still inside a 5s listen, which would leave two loops fighting over the mic.
+    if always_on_flag or (always_on_thread is not None and always_on_thread.is_alive()):
+        always_on_flag = True
         return ToggleResponse(
             running=True,
             message="Always-on listening is already running."

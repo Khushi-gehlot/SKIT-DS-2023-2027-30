@@ -10,3 +10,5 @@ psutil
 pygetwindow
 wikipedia
 requests
+PyAudio
+streamlit

@@ -224,8 +224,18 @@ def open_music_folder():
 
 def open_this_pc():
     speak("Opening This PC.")
-    this_pc = os.path.join(os.path.expanduser("~"), "This PC")
-    subprocess.Popen(f'explorer "{this_pc}"')
+    # There is no "~/This PC" folder; This PC is a shell namespace location.
+    subprocess.Popen("explorer shell:MyComputerFolder")
+
+
+def open_youtube():
+    speak("Opening YouTube.")
+    webbrowser.open("https://www.youtube.com")
+
+
+def open_google():
+    speak("Opening Google.")
+    webbrowser.open("https://www.google.com")
 # =============== WINDOW MANAGEMENT ===============
 
 def show_desktop():
