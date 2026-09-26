@@ -1,73 +1,145 @@
 # streamlit_app.py
 """
-VyasOS Voice Assistant - Streamlit front end.
+VyasOS Voice Assistant — single-process Streamlit app.
 
-This replaces the old React/Vite UI. It is a thin client: every action goes
-through the FastAPI backend (api_server.py) over HTTP, so the speech
-recognition, TTS and OS automation all still happen server-side.
+There is no web server and no HTTP layer. This app imports the command router
+directly and calls the automation functions in-process, so the whole assistant
+is one Python program:
 
-Run the backend first, then:
     streamlit run streamlit_app.py
+
+Speech recognition, text-to-speech and OS automation all run inside this
+process. api_server.py (FastAPI) is kept in the repo for reference but is not
+used by this UI.
 """
 
 import datetime
+import threading
 
-import requests
 import streamlit as st
 
-API_BASE = "http://127.0.0.1:8000"
+from core import recognize_speech, speak
+from command_map import COMMANDS
+from main import process_command
 
-# /api/listen blocks until the user says a sleep word, so it needs a long
-# timeout. The quick endpoints get a short one so a dead backend fails fast.
-QUICK_TIMEOUT = 5
-LISTEN_TIMEOUT = 600
+WAKE_WORDS = ["hello vyas", "hello bhai", "hey vyas"]
+SLEEP_WORDS = ["sleep", "go to sleep", "stop listening", "goodbye", "good night"]
 
 
-# ----------------- Backend helpers -----------------
+# ----------------- Always-on wake word controller -----------------
 
-def api_get(path: str, timeout: int = QUICK_TIMEOUT):
-    """GET from the backend. Returns (ok, payload_or_error_string)."""
+class AlwaysOnController:
+    """
+    Owns the background wake-word thread.
+
+    Streamlit re-executes this script on every interaction, so this object is
+    held in st.cache_resource to survive reruns. Without that, each rerun would
+    create a new controller and leak threads that all fight over the mic.
+    """
+
+    def __init__(self):
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self.events: list[dict] = []
+
+    # --- state ---
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def log(self, heard: str, message: str, success: bool):
+        with self._lock:
+            self.events.insert(0, {
+                "heard": heard,
+                "message": message,
+                "success": success,
+                "time": datetime.datetime.now().strftime("%H:%M:%S"),
+            })
+            del self.events[50:]
+
+    def drain(self) -> list[dict]:
+        with self._lock:
+            items = list(self.events)
+            self.events.clear()
+        return items
+
+    # --- control ---
+
+    def start(self) -> str:
+        if self.is_running():
+            return "Always-on is already running."
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return "Always-on listening started."
+
+    def stop(self) -> str:
+        if not self.is_running():
+            return "Always-on is already stopped."
+        self._stop.set()
+        return "Stopping — will finish the current listen first."
+
+    # --- the loop ---
+
+    def _loop(self):
+        """Wait for a wake word, then take commands until a sleep word."""
+        try:
+            while not self._stop.is_set():
+                text = recognize_speech()
+                if self._stop.is_set():
+                    break
+                if not text:
+                    continue
+
+                if not any(w in text for w in WAKE_WORDS):
+                    self.log(text, "Ignored — no wake word.", False)
+                    continue
+
+                speak("I'm awake. Give me a command, or say sleep.")
+                self.log(text, "Wake word detected.", True)
+
+                while not self._stop.is_set():
+                    cmd = recognize_speech()
+                    if self._stop.is_set() or not cmd:
+                        continue
+
+                    if any(w in cmd for w in SLEEP_WORDS):
+                        speak("Going back to sleep.")
+                        self.log(cmd, "Session ended.", True)
+                        break
+
+                    try:
+                        ok = process_command(cmd)
+                        self.log(cmd, "Executed." if ok else "Not recognised.", ok)
+                    except Exception as e:
+                        self.log(cmd, f"Error: {e}", False)
+        except Exception as e:
+            self.log("(loop crashed)", str(e), False)
+        finally:
+            self._stop.set()
+
+
+@st.cache_resource
+def get_controller() -> AlwaysOnController:
+    return AlwaysOnController()
+
+
+# ----------------- Command execution -----------------
+
+def run_command(text: str) -> tuple[bool, str]:
+    """Run a command in-process. Returns (success, message)."""
+    text = text.strip()
+    if not text:
+        return False, "No command given."
     try:
-        res = requests.get(f"{API_BASE}{path}", timeout=timeout)
-        res.raise_for_status()
-        return True, res.json()
-    except requests.exceptions.ConnectionError:
-        return False, "Could not reach the backend. Is uvicorn running on port 8000?"
-    except requests.exceptions.Timeout:
-        return False, f"Backend timed out after {timeout}s."
+        ok = process_command(text)
     except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-
-
-def api_post(path: str, timeout: int = QUICK_TIMEOUT):
-    """POST to the backend. Returns (ok, payload_or_error_string)."""
-    try:
-        res = requests.post(f"{API_BASE}{path}", timeout=timeout)
-        res.raise_for_status()
-        return True, res.json()
-    except requests.exceptions.ConnectionError:
-        return False, "Could not reach the backend. Is uvicorn running on port 8000?"
-    except requests.exceptions.Timeout:
-        return False, f"Backend timed out after {timeout}s."
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-
-
-def api_post_json(path: str, payload: dict, timeout: int = QUICK_TIMEOUT):
-    try:
-        res = requests.post(f"{API_BASE}{path}", json=payload, timeout=timeout)
-        res.raise_for_status()
-        return True, res.json()
-    except requests.exceptions.ConnectionError:
-        return False, "Could not reach the backend. Is uvicorn running on port 8000?"
-    except requests.exceptions.Timeout:
-        return False, f"Backend timed out after {timeout}s."
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
+        return False, f"Error while executing '{text}': {type(e).__name__}: {e}"
+    return (True, f"Executed: {text}") if ok else (False, f"Unknown command: {text}")
 
 
 def log(heard: str, message: str, success: bool):
-    """Prepend an entry to the conversation log."""
     st.session_state.history.insert(0, {
         "heard": heard,
         "message": message,
@@ -76,82 +148,85 @@ def log(heard: str, message: str, success: bool):
     })
 
 
-# ----------------- Page setup -----------------
+def listen_once() -> tuple[bool, str, str]:
+    """Wake word, then one command session. Returns (success, heard, message)."""
+    speak("Say the wake word to start.")
+    wake = recognize_speech()
+    if not wake:
+        return False, "(nothing heard)", "I did not hear the wake word."
+    if not any(w in wake for w in WAKE_WORDS):
+        return False, wake, f"No wake word in '{wake}'. Say 'hello vyas' first."
+
+    speak("I'm awake. Give me a command, or say sleep.")
+    last = "Session ended."
+    heard = f"Wake: {wake}"
+
+    while True:
+        cmd = recognize_speech()
+        if not cmd:
+            speak("I didn't catch that.")
+            continue
+        if any(w in cmd for w in SLEEP_WORDS):
+            speak("Going back to sleep.")
+            heard += f" | last: {cmd}"
+            return True, heard, "Session ended by sleep word."
+        ok, msg = run_command(cmd)
+        speak("Done." if ok else "I did not recognise that.")
+        heard += f" | {cmd}"
+        last = msg
+
+
+# ----------------- Page -----------------
 
 st.set_page_config(page_title="VyasOS Voice Assistant", page_icon="🎙️", layout="wide")
 
-# Unlike the React version, always-on mode is NOT auto-started on load.
-# Streamlit re-runs this script on every interaction, which would have
-# hammered the start endpoint.
 if "history" not in st.session_state:
     st.session_state.history = []
-if "always_on" not in st.session_state:
-    st.session_state.always_on = False
 if "status" not in st.session_state:
     st.session_state.status = "Idle."
 if "last_heard" not in st.session_state:
     st.session_state.last_heard = "—"
 
+controller = get_controller()
 
-# ----------------- Sidebar: connection + commands -----------------
+# Pull anything the background thread logged since the last rerun.
+for ev in reversed(controller.drain()):
+    st.session_state.history.insert(0, ev)
+
 
 with st.sidebar:
-    st.subheader("Backend")
-    st.caption(API_BASE)
-
-    ok, payload = api_get("/api/commands")
-    if ok:
-        st.success(f"Connected · {len(payload)} commands")
-        commands = payload
-    else:
-        st.error("Offline")
-        st.caption(payload)
-        commands = []
+    st.subheader("VyasOS")
+    st.success(f"{len(COMMANDS)} commands loaded")
+    st.caption("Running in-process — no backend server.")
 
     st.divider()
     st.subheader("Always-on wake word")
-    st.caption(
-        "Listens continuously for a wake word "
-        "(\"hello vyas\", \"hello bhai\", \"hey vyas\") in a background thread."
-    )
+    st.caption("Listens continuously for " + ", ".join(f'"{w}"' for w in WAKE_WORDS) + ".")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Start", use_container_width=True):
-            ok, payload = api_post("/api/always_on/start")
-            if ok:
-                st.session_state.always_on = payload.get("running", False)
-                st.session_state.status = payload.get("message", "")
-            else:
-                st.session_state.status = payload
-            st.rerun()
-    with col_b:
-        if st.button("Stop", use_container_width=True):
-            ok, payload = api_post("/api/always_on/stop")
-            if ok:
-                st.session_state.always_on = payload.get("running", True)
-                st.session_state.status = payload.get("message", "")
-            else:
-                st.session_state.status = payload
-            st.rerun()
+    running = controller.is_running()
+    c1, c2 = st.columns(2)
+    if c1.button("Start", use_container_width=True, disabled=running):
+        st.session_state.status = controller.start()
+        st.rerun()
+    if c2.button("Stop", use_container_width=True, disabled=not running):
+        st.session_state.status = controller.stop()
+        st.rerun()
 
-    if st.session_state.always_on:
-        st.info("Always-on is running.")
+    if running:
+        st.info("Listening in background.")
+        st.caption("Refresh the page to see what it heard.")
     else:
-        st.caption("Always-on is stopped.")
+        st.caption("Stopped.")
 
-    if commands:
-        st.divider()
-        with st.expander(f"All {len(commands)} supported keywords"):
-            st.write(", ".join(commands))
+    st.divider()
+    with st.expander(f"All {len(COMMANDS)} keywords"):
+        st.write(", ".join(sorted(COMMANDS)))
 
-
-# ----------------- Main area -----------------
 
 st.title("🎙️ VyasOS Voice Assistant")
 st.caption(
-    "Say the wake word, then a command. Or type one below — typed commands "
-    "skip speech recognition entirely, which is the reliable way to demo."
+    "Say the wake word, then a command. Or type one — typed commands skip "
+    "speech recognition and are the reliable way to demo."
 )
 
 left, right = st.columns([3, 2])
@@ -159,26 +234,22 @@ left, right = st.columns([3, 2])
 with left:
     st.subheader("Voice")
     st.caption(
-        "Listens once for a wake word, then keeps taking commands until you "
-        "say \"sleep\". The page will be blocked while the session is active."
+        "Listens for a wake word, then keeps taking commands until you say "
+        "\"sleep\". The page is blocked while the session runs."
     )
 
     if st.button("🎤 Start listening session", type="primary", use_container_width=True):
         with st.spinner("Listening… say your wake word, then commands. Say 'sleep' to end."):
-            ok, payload = api_post("/api/listen", timeout=LISTEN_TIMEOUT)
-        if ok:
-            st.session_state.last_heard = payload.get("recognized") or "(no speech)"
-            st.session_state.status = payload.get("message", "")
-            log(st.session_state.last_heard, payload.get("message", ""), payload.get("success", False))
-        else:
-            st.session_state.status = payload
-            log("(error)", payload, False)
+            ok, heard, msg = listen_once()
+        st.session_state.last_heard = heard
+        st.session_state.status = msg
+        log(heard, msg, ok)
         st.rerun()
 
     st.divider()
     st.subheader("Type a command")
 
-    with st.form("manual_command", clear_on_submit=True):
+    with st.form("manual", clear_on_submit=True):
         typed = st.text_input(
             "Command",
             placeholder="e.g. open notepad, display settings, battery",
@@ -187,13 +258,9 @@ with left:
         submitted = st.form_submit_button("Run", use_container_width=True)
 
     if submitted and typed.strip():
-        ok, payload = api_post_json("/api/command", {"command": typed.strip()}, timeout=60)
-        if ok:
-            st.session_state.status = payload.get("message", "")
-            log(typed.strip(), payload.get("message", ""), payload.get("success", False))
-        else:
-            st.session_state.status = payload
-            log(typed.strip(), payload, False)
+        ok, msg = run_command(typed)
+        st.session_state.status = msg
+        log(typed.strip(), msg, ok)
         st.rerun()
 
     st.divider()
@@ -204,7 +271,7 @@ with left:
 
 with right:
     st.subheader("Quick commands")
-    st.caption("Sent as text — no microphone needed.")
+    st.caption("Run as text — no microphone needed.")
 
     quick = [
         "open notepad", "open calculator", "battery",
@@ -212,16 +279,12 @@ with right:
         "open downloads", "take screenshot", "scroll down",
         "volume up", "volume down", "open youtube",
     ]
-    qcols = st.columns(2)
+    cols = st.columns(2)
     for i, cmd in enumerate(quick):
-        if qcols[i % 2].button(cmd, key=f"quick_{cmd}", use_container_width=True):
-            ok, payload = api_post_json("/api/command", {"command": cmd}, timeout=60)
-            if ok:
-                st.session_state.status = payload.get("message", "")
-                log(cmd, payload.get("message", ""), payload.get("success", False))
-            else:
-                st.session_state.status = payload
-                log(cmd, payload, False)
+        if cols[i % 2].button(cmd, key=f"q_{cmd}", use_container_width=True):
+            ok, msg = run_command(cmd)
+            st.session_state.status = msg
+            log(cmd, msg, ok)
             st.rerun()
 
     st.divider()
