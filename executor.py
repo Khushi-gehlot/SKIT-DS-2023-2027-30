@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import Callable
 
 import actions
+import browser_actions
+from core import speak
 from intent import ExecutionResult, Intent
 
 # action name -> handler
@@ -208,6 +210,134 @@ def _battery(intent: Intent) -> ExecutionResult:
 def _send_email(intent: Intent) -> ExecutionResult:
     actions.send_email_voice()
     return ExecutionResult.ok("Email flow finished.", intent)
+
+
+# =============== BROWSER (Playwright) ===============
+#
+# These drive a browser the assistant controls, as opposed to the open_website
+# action which just hands a URL to the default browser. Every browser_actions
+# function raises BrowserError with a sentence meant to be spoken, so one
+# wrapper converts that into a failed result.
+
+def _browser(fn, intent: Intent, success: str) -> ExecutionResult:
+    """Run a browser action, turning BrowserError into a spoken failure."""
+    try:
+        value = fn()
+    except browser_actions.BrowserError as e:
+        # Expected, explainable failure - say it rather than logging a trace.
+        speak(str(e))
+        return ExecutionResult.fail(str(e), intent)
+    except Exception as e:
+        print(f"Browser error: {type(e).__name__}: {e}")
+        speak("Sorry, the browser action failed.")
+        return ExecutionResult.fail(f"Browser error: {e}", intent)
+    return ExecutionResult.ok(success.format(value=value), intent, data=value)
+
+
+@handler("browser_open")
+def _browser_open(intent: Intent) -> ExecutionResult:
+    url = intent.params.get("query")
+    if not url:
+        url = actions.ask_for_query("Which website should I open?")
+    if not url:
+        return ExecutionResult.fail("No website given.", intent)
+    return _browser(lambda: browser_actions.browser_open(url), intent, "Opened {value}")
+
+
+@handler("browser_click")
+def _browser_click(intent: Intent) -> ExecutionResult:
+    """Click a link by position ("the second link") or by name."""
+    if intent.target == "text":
+        label = intent.params.get("text")
+        if not label:
+            return ExecutionResult.fail("No link name given.", intent)
+        return _browser(
+            lambda: browser_actions.browser_click_link(label), intent, "Clicked {value}"
+        )
+
+    ordinal = intent.params.get("ordinal")
+    if ordinal is None:
+        # "click link" with no position - list them so the user can choose by
+        # number, which is far more reliable than naming a link aloud.
+        return _browser(
+            lambda: browser_actions.browser_list_links(), intent,
+            "Listed links - say the number you want."
+        )
+
+    index = browser_actions.parse_ordinal(str(ordinal))
+    if index is None:
+        return ExecutionResult.fail(f"I did not understand '{ordinal}'.", intent)
+    return _browser(
+        lambda: browser_actions.browser_click_index(index), intent, "Clicked {value}"
+    )
+
+
+@handler("browser_type")
+def _browser_type(intent: Intent) -> ExecutionResult:
+    """Type into a field. The field hint is optional - most pages have one
+    obvious input, and making the user describe it defeats the point."""
+    value = intent.params.get("value")
+    if not value:
+        value = actions.ask_for_query("What should I type?")
+    if not value:
+        return ExecutionResult.fail("Nothing to type.", intent)
+
+    field = intent.params.get("field")
+    submit = bool(intent.params.get("submit"))
+    return _browser(
+        lambda: browser_actions.browser_type(value, field, submit),
+        intent, "Typed {value}",
+    )
+
+
+@handler("browser_submit")
+def _browser_submit(intent: Intent) -> ExecutionResult:
+    return _browser(
+        lambda: browser_actions.browser_press_enter(), intent, "Pressed Enter."
+    )
+
+
+@handler("browser_nav")
+def _browser_nav(intent: Intent) -> ExecutionResult:
+    moves = {
+        "back": browser_actions.browser_back,
+        "forward": browser_actions.browser_forward,
+        "reload": browser_actions.browser_reload,
+    }
+    fn = moves.get(intent.target)
+    if fn is None:
+        return ExecutionResult.fail(f"Unknown navigation: {intent.target}", intent)
+    return _browser(fn, intent, "Now on {value}")
+
+
+@handler("browser_scroll")
+def _browser_scroll(intent: Intent) -> ExecutionResult:
+    return _browser(
+        lambda: browser_actions.browser_scroll(intent.target or "down"),
+        intent, "Scrolled {value}",
+    )
+
+
+@handler("browser_links")
+def _browser_links(intent: Intent) -> ExecutionResult:
+    return _browser(
+        lambda: browser_actions.browser_list_links(), intent, "Links read out."
+    )
+
+
+@handler("browser_read")
+def _browser_read(intent: Intent) -> ExecutionResult:
+    return _browser(lambda: browser_actions.browser_read_page(), intent, "Page read.")
+
+
+@handler("browser_title")
+def _browser_title(intent: Intent) -> ExecutionResult:
+    return _browser(lambda: browser_actions.browser_page_title(), intent, "{value}")
+
+
+@handler("browser_close")
+def _browser_close(intent: Intent) -> ExecutionResult:
+    return _browser(lambda: browser_actions.browser_close(), intent, "Browser {value}.")
 
 
 # =============== ENTRY POINT ===============
