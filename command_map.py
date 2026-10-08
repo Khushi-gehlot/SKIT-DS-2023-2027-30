@@ -1,365 +1,311 @@
-from actions import (
-    # Browser / web
-   
-    send_email_voice,
-    search_google_voice,
-    search_youtube_voice,
-    open_youtube,
-    open_google,
+"""
+The command registry: spoken phrase -> (action, target).
 
-    # Scrolling / screen
-    move_cursor_up,
-    move_cursor_down,
-    move_cursor_left,
-    move_cursor_right,
-    click_cursor,
-    double_click_cursor,
-    right_click_cursor,
-    scroll_down,
-    scroll_up,
-    take_screenshot,
+This file is pure data. It holds no logic and imports nothing, which is the
+point: the NLU layer reads it to decide *what the user wants*, and never needs
+to know how anything is carried out. The handlers that actually do the work
+live in executor.py.
 
-    # Power / battery
-    shutdown_system,
-    restart_system,
-    show_battery,
-    lock_system,
-    sleep_system,
+Adding a command is one line here. Adding a new *kind* of command means a new
+action, which also needs a handler registered in executor.py.
 
-    # Apps
-    open_notepad,
-    open_calculator,
-    open_cmd,
-    open_file_explorer,
-    open_control_panel,
-    open_task_manager,
+    "open notepad": ("open_app", "notepad")
+       phrase              action   target
+"""
 
-    # Folders
-    open_downloads_folder,
-    open_documents_folder,
-    open_desktop_folder,
-    open_videos_folder,
-    open_pictures_folder,
-    open_music_folder,
-    open_this_pc,
+# phrase -> (action, target)
+COMMANDS: dict[str, tuple[str, str | None]] = {
 
-    # Window management
-    show_desktop,
-    minimize_window,
-    maximize_window,
-    close_window,
-    switch_window,
+    # ===================== APPLICATIONS =====================
 
-    # Volume / media
-    volume_up,
-    volume_down,
-    mute_volume,
-    unmute_volume,
-    media_play_pause,
-    media_next,
-    media_previous,
+    "calculator": ("open_app", "calculator"),
+    "open calculator": ("open_app", "calculator"),
 
-    # Windows Settings sections (ms-settings)
-    open_settings,
-    open_display_settings,
-    open_sound_settings,
-    open_notifications_settings,
-    open_power_sleep_settings,
-    open_storage_settings,
-    open_multitasking_settings,
-    open_clipboard_settings,
-    open_personalization_settings,
-    open_background_settings,
-    open_colors_settings,
-    open_lock_screen_settings,
-    open_themes_settings,
-    open_fonts_settings,
-    open_start_menu_settings,
-    open_taskbar_settings,
-    open_time_language_settings,
-    open_date_time_settings,
-    open_region_language_settings,
-    open_language_settings,
-    open_network_settings,
-    open_wifi_settings,
-    open_ethernet_settings,
-    open_bluetooth_settings,
-    open_devices_settings,
-    open_mouse_settings,
-    open_keyboard_settings,
-    open_touchpad_settings,
-    open_printers_settings,
-    open_updates_settings,
-    open_windows_security_settings,
-    open_privacy_settings,
-    open_gaming_settings,
-    open_game_bar_settings,
-    open_captures_settings,
-    open_game_mode_settings,
-)
+    "command prompt": ("open_app", "command_prompt"),
+    "open command prompt": ("open_app", "command_prompt"),
+    "cmd": ("open_app", "command_prompt"),
 
+    "control panel": ("open_app", "control_panel"),
+    "open control panel": ("open_app", "control_panel"),
 
-COMMANDS = {
+    "file explorer": ("open_app", "file_explorer"),
+    "open file explorer": ("open_app", "file_explorer"),
+    "explorer": ("open_app", "file_explorer"),
 
-    # ================= SEARCH =================
+    "notepad": ("open_app", "notepad"),
+    "open notepad": ("open_app", "notepad"),
 
-    "search google": search_google_voice,
-    "google search": search_google_voice,
+    "task manager": ("open_app", "task_manager"),
+    "open task manager": ("open_app", "task_manager"),
 
-    "search youtube": search_youtube_voice,
-    "youtube search": search_youtube_voice,
-
-    # ===================== BROWSER / WEB =====================
-
-    "open youtube": open_youtube,
-    "youtube": open_youtube,
-
-    "open google": open_google,
-    "google": open_google,
-
-
-    # ================= CURSOR CONTROL =================
-
-    "move up": move_cursor_up,
-    "move down": move_cursor_down,
-    "move left": move_cursor_left,
-    "move right": move_cursor_right,
-
-    "move cursor up": move_cursor_up,
-    "move cursor down": move_cursor_down,
-    "move cursor left": move_cursor_left,
-    "move cursor right": move_cursor_right,
-
-    "click": click_cursor,
-    "double click": double_click_cursor,
-    "right click": right_click_cursor,
-
-    "scroll down": scroll_down,
-    "scroll up": scroll_up,
-    "take screenshot": take_screenshot,
-    "screenshot": take_screenshot,
-
-    # ===================== POWER / SYSTEM =====================
-
-    "shutdown": shutdown_system,
-    "shut down": shutdown_system,
-    "turn off": shutdown_system,
-
-    "restart": restart_system,
-    "reboot": restart_system,
-
-    "battery": show_battery,
-    "battery status": show_battery,
-
-    "lock": lock_system,
-    "lock system": lock_system,
-
-    "sleep": sleep_system,          # also used as sleep word for assistant
-    "go to sleep": sleep_system,
-
-    # ===================== BASIC APPS =====================
-
-    "notepad": open_notepad,
-    "open notepad": open_notepad,
-
-    "calculator": open_calculator,
-    "open calculator": open_calculator,
-
-    "command prompt": open_cmd,
-    "open command prompt": open_cmd,
-    "cmd": open_cmd,
-
-    "file explorer": open_file_explorer,
-    "open file explorer": open_file_explorer,
-    "explorer": open_file_explorer,
-
-    "control panel": open_control_panel,
-    "open control panel": open_control_panel,
-
-    "task manager": open_task_manager,
-    "open task manager": open_task_manager,
 
     # ===================== FOLDERS =====================
 
-    "downloads": open_downloads_folder,
-    "open downloads": open_downloads_folder,
-    "open download folder": open_downloads_folder,
+    "desktop": ("open_folder", "desktop"),
+    "open desktop": ("open_folder", "desktop"),
+    "open desktop folder": ("open_folder", "desktop"),
 
-    "documents": open_documents_folder,
-    "open documents": open_documents_folder,
-    "open document folder": open_documents_folder,
+    "documents": ("open_folder", "documents"),
+    "open documents": ("open_folder", "documents"),
+    "open document folder": ("open_folder", "documents"),
 
-    "desktop": open_desktop_folder,
-    "open desktop": open_desktop_folder,
-    "open desktop folder": open_desktop_folder,
+    "downloads": ("open_folder", "downloads"),
+    "open downloads": ("open_folder", "downloads"),
+    "open download folder": ("open_folder", "downloads"),
 
-    "videos": open_videos_folder,
-    "pictures": open_pictures_folder,
-    "music": open_music_folder,
-    "this pc": open_this_pc,
+    "music": ("open_folder", "music"),
+
+    "pictures": ("open_folder", "pictures"),
+
+    "this pc": ("open_folder", "this_pc"),
+
+    "videos": ("open_folder", "videos"),
+
+
+    # ===================== WINDOWS SETTINGS =====================
+
+    "bluetooth settings": ("open_settings", "bluetooth"),
+    "bluetooth": ("open_settings", "bluetooth"),
+
+    "clipboard settings": ("open_settings", "clipboard"),
+
+    "devices settings": ("open_settings", "connecteddevices"),
+    "device settings": ("open_settings", "connecteddevices"),
+
+    "time and language": ("open_settings", "dateandtime"),
+    "time settings": ("open_settings", "dateandtime"),
+    "date and time": ("open_settings", "dateandtime"),
+
+    "touchpad settings": ("open_settings", "devices-touchpad"),
+
+    "display settings": ("open_settings", "display"),
+    "open display settings": ("open_settings", "display"),
+    "screen settings": ("open_settings", "display"),
+    "brightness settings": ("open_settings", "display"),
+
+    "font settings": ("open_settings", "fonts"),
+    "fonts": ("open_settings", "fonts"),
+
+    "gaming settings": ("open_settings", "gaming-gamebar"),
+    "game bar settings": ("open_settings", "gaming-gamebar"),
+    "xbox game bar": ("open_settings", "gaming-gamebar"),
+
+    "capture settings": ("open_settings", "gaming-gamedvr"),
+    "game capture settings": ("open_settings", "gaming-gamedvr"),
+
+    "game mode settings": ("open_settings", "gaming-gamemode"),
+    "game mode": ("open_settings", "gaming-gamemode"),
+
+    "settings": ("open_settings", "home"),
+    "open settings": ("open_settings", "home"),
+
+    "keyboard settings": ("open_settings", "keyboard"),
+
+    "language settings": ("open_settings", "language"),
+
+    "lock screen settings": ("open_settings", "lockscreen"),
+    "lock screen": ("open_settings", "lockscreen"),
+
+    "mouse settings": ("open_settings", "mousetouchpad"),
+
+    "multitasking settings": ("open_settings", "multitasking"),
+
+    "network settings": ("open_settings", "network"),
+    "internet settings": ("open_settings", "network"),
+
+    "ethernet settings": ("open_settings", "network-ethernet"),
+
+    "wifi settings": ("open_settings", "network-wifi"),
+    "wi-fi settings": ("open_settings", "network-wifi"),
+
+    "notification settings": ("open_settings", "notifications"),
+    "open notifications": ("open_settings", "notifications"),
+
+    "personalization": ("open_settings", "personalization"),
+    "personalisation": ("open_settings", "personalization"),
+    "open personalization": ("open_settings", "personalization"),
+
+    "background settings": ("open_settings", "personalization-background"),
+    "change background": ("open_settings", "personalization-background"),
+    "wallpaper": ("open_settings", "personalization-background"),
+
+    "color settings": ("open_settings", "personalization-colors"),
+    "colors": ("open_settings", "personalization-colors"),
+
+    "start menu settings": ("open_settings", "personalization-start"),
+    "start menu": ("open_settings", "personalization-start"),
+
+    "power settings": ("open_settings", "powersleep"),
+    "power and sleep": ("open_settings", "powersleep"),
+
+    "printers and scanners": ("open_settings", "printers"),
+    "printer settings": ("open_settings", "printers"),
+
+    "privacy settings": ("open_settings", "privacy"),
+    "privacy": ("open_settings", "privacy"),
+
+    "region settings": ("open_settings", "regionformatting"),
+
+    "sound settings": ("open_settings", "sound"),
+    "open sound settings": ("open_settings", "sound"),
+    "audio settings": ("open_settings", "sound"),
+    "speaker settings": ("open_settings", "sound"),
+
+    "storage settings": ("open_settings", "storagesense"),
+    "open storage": ("open_settings", "storagesense"),
+
+    "taskbar settings": ("open_settings", "taskbar"),
+    "taskbar": ("open_settings", "taskbar"),
+
+    "themes": ("open_settings", "themes"),
+    "theme settings": ("open_settings", "themes"),
+
+    "windows security": ("open_settings", "windowsdefender"),
+    "security settings": ("open_settings", "windowsdefender"),
+
+    "update settings": ("open_settings", "windowsupdate"),
+    "windows update": ("open_settings", "windowsupdate"),
+
+
+    # ===================== WEBSITES =====================
+
+    "open google": ("open_website", "google"),
+    "google": ("open_website", "google"),
+
+    "open youtube": ("open_website", "youtube"),
+    "youtube": ("open_website", "youtube"),
+
+
+    # ===================== WEB SEARCH =====================
+
+    "search google": ("search_web", "google"),
+    "google search": ("search_web", "google"),
+
+    "search youtube": ("search_web", "youtube"),
+    "youtube search": ("search_web", "youtube"),
+
+
+    # ===================== CURSOR MOVEMENT =====================
+
+    "move down": ("cursor_move", "down"),
+    "move cursor down": ("cursor_move", "down"),
+
+    "move left": ("cursor_move", "left"),
+    "move cursor left": ("cursor_move", "left"),
+
+    "move right": ("cursor_move", "right"),
+    "move cursor right": ("cursor_move", "right"),
+
+    "move up": ("cursor_move", "up"),
+    "move cursor up": ("cursor_move", "up"),
+
+
+    # ===================== CURSOR CLICKS =====================
+
+    "double click": ("cursor_click", "double"),
+
+    "click": ("cursor_click", "left"),
+
+    "right click": ("cursor_click", "right"),
+
+
+    # ===================== SCROLLING =====================
+
+    "scroll down": ("scroll", "down"),
+
+    "scroll up": ("scroll", "up"),
+
+
+    # ===================== SCREENSHOT =====================
+
+    "take screenshot": ("screenshot", None),
+    "screenshot": ("screenshot", None),
+
 
     # ===================== WINDOW MANAGEMENT =====================
 
-    "show desktop": show_desktop,
+    "close window": ("window", "close"),
 
-    "minimise": minimize_window,
-    "minimise window": minimize_window,
+    "maximise": ("window", "maximize"),
+    "maximise window": ("window", "maximize"),
 
-    "maximise": maximize_window,
-    "maximise window": maximize_window,
+    "minimise": ("window", "minimize"),
+    "minimise window": ("window", "minimize"),
 
-    "close window": close_window,
+    "show desktop": ("window", "show_desktop"),
 
-    "switch window": switch_window,
-    "next window": switch_window,
-    "change window": switch_window,
-
-    # ===================== VOLUME / MEDIA =====================
-
-    "volume up": volume_up,
-    "increase volume": volume_up,
-    "sound up": volume_up,
-
-    "volume down": volume_down,
-    "decrease volume": volume_down,
-    "sound down": volume_down,
-
-    "mute": mute_volume,
-    "mute volume": mute_volume,
-
-    "unmute": unmute_volume,
-    "unmute volume": unmute_volume,
-    "sound on": unmute_volume,
-
-    "play pause": media_play_pause,
-    "pause music": media_play_pause,
-    "play music": media_play_pause,
-
-    "next song": media_next,
-    "next track": media_next,
-
-    "previous song": media_previous,
-    "previous track": media_previous,
-
-    # ===================== MAIN SETTINGS APP =====================
-
-    "settings": open_settings,
-    "open settings": open_settings,
-
-    # ===================== DISPLAY / SYSTEM SETTINGS =====================
-
-    "display settings": open_display_settings,
-    "open display settings": open_display_settings,
-    "screen settings": open_display_settings,
-    "brightness settings": open_display_settings,
-
-    "sound settings": open_sound_settings,
-    "open sound settings": open_sound_settings,
-    "audio settings": open_sound_settings,
-    "speaker settings": open_sound_settings,
-
-    "notification settings": open_notifications_settings,
-    "open notifications": open_notifications_settings,
-
-    "power settings": open_power_sleep_settings,
-    "power and sleep": open_power_sleep_settings,
-
-    "storage settings": open_storage_settings,
-    "open storage": open_storage_settings,
-
-    "multitasking settings": open_multitasking_settings,
-
-    "clipboard settings": open_clipboard_settings,
-
-    # ===================== PERSONALIZATION =====================
-
-    "personalization": open_personalization_settings,
-    "personalisation": open_personalization_settings,
-    "open personalization": open_personalization_settings,
-
-    "background settings": open_background_settings,
-    "change background": open_background_settings,
-    "wallpaper": open_background_settings,
-
-    "color settings": open_colors_settings,
-    "colors": open_colors_settings,
-
-    "lock screen settings": open_lock_screen_settings,
-    "lock screen": open_lock_screen_settings,
-
-    "themes": open_themes_settings,
-    "theme settings": open_themes_settings,
-
-    "font settings": open_fonts_settings,
-    "fonts": open_fonts_settings,
-
-    "start menu settings": open_start_menu_settings,
-    "start menu": open_start_menu_settings,
-
-    "taskbar settings": open_taskbar_settings,
-    "taskbar": open_taskbar_settings,
-
-    # ===================== TIME / LANGUAGE =====================
-
-    "time and language": open_time_language_settings,
-    "time settings": open_date_time_settings,
-    "date and time": open_date_time_settings,
-
-    "region settings": open_region_language_settings,
-    "language settings": open_language_settings,
-
-    # ================= EMAIL =================
-
-    "send email": send_email_voice,
-    "send mail": send_email_voice,
-    "compose email": send_email_voice,
+    "switch window": ("window", "switch"),
+    "next window": ("window", "switch"),
+    "change window": ("window", "switch"),
 
 
-    # ===================== NETWORK / INTERNET =====================
+    # ===================== VOLUME =====================
 
-    "network settings": open_network_settings,
-    "internet settings": open_network_settings,
+    "volume down": ("volume", "down"),
+    "decrease volume": ("volume", "down"),
+    "sound down": ("volume", "down"),
 
-    "wifi settings": open_wifi_settings,
-    "wi-fi settings": open_wifi_settings,
+    "mute": ("volume", "mute"),
+    "mute volume": ("volume", "mute"),
 
-    "ethernet settings": open_ethernet_settings,
+    "unmute": ("volume", "unmute"),
+    "unmute volume": ("volume", "unmute"),
+    "sound on": ("volume", "unmute"),
 
-    # ===================== DEVICES =====================
+    "volume up": ("volume", "up"),
+    "increase volume": ("volume", "up"),
+    "sound up": ("volume", "up"),
 
-    "bluetooth settings": open_bluetooth_settings,
-    "bluetooth": open_bluetooth_settings,
 
-    "devices settings": open_devices_settings,
-    "device settings": open_devices_settings,
+    # ===================== MEDIA =====================
 
-    "mouse settings": open_mouse_settings,
-    "keyboard settings": open_keyboard_settings,
-    "touchpad settings": open_touchpad_settings,
-    "printers and scanners": open_printers_settings,
-    "printer settings": open_printers_settings,
+    "next song": ("media", "next"),
+    "next track": ("media", "next"),
 
-    # ===================== UPDATE / SECURITY / PRIVACY =====================
+    "play pause": ("media", "play_pause"),
+    "pause music": ("media", "play_pause"),
+    "play music": ("media", "play_pause"),
 
-    "update settings": open_updates_settings,
-    "windows update": open_updates_settings,
+    "previous song": ("media", "previous"),
+    "previous track": ("media", "previous"),
 
-    "windows security": open_windows_security_settings,
-    "security settings": open_windows_security_settings,
 
-    "privacy settings": open_privacy_settings,
-    "privacy": open_privacy_settings,
+    # ===================== POWER =====================
 
-    # ===================== GAMING =====================
+    "lock": ("power", "lock"),
+    "lock system": ("power", "lock"),
 
-    "gaming settings": open_gaming_settings,
-    "game bar settings": open_game_bar_settings,
-    "xbox game bar": open_game_bar_settings,
+    "restart": ("power", "restart"),
+    "reboot": ("power", "restart"),
 
-    "capture settings": open_captures_settings,
-    "game capture settings": open_captures_settings,
+    "shutdown": ("power", "shutdown"),
+    "shut down": ("power", "shutdown"),
+    "turn off": ("power", "shutdown"),
 
-    "game mode settings": open_game_mode_settings,
-    "game mode": open_game_mode_settings,
-    
+    "sleep": ("power", "sleep"),
+    "go to sleep": ("power", "sleep"),
+
+
+    # ===================== SYSTEM INFO =====================
+
+    "battery": ("battery", None),
+    "battery status": ("battery", None),
+
+
+    # ===================== EMAIL =====================
+
+    "send email": ("send_email", None),
+    "send mail": ("send_email", None),
+    "compose email": ("send_email", None),
+
 }
+
+
+# Every action name the registry can produce. executor.py must have a handler
+# for each of these; a test asserts that.
+ACTIONS = sorted({action for action, _ in COMMANDS.values()})
+
+
+def phrases() -> list[str]:
+    """All recognised phrases, longest first (the matcher relies on this)."""
+    return sorted(COMMANDS, key=len, reverse=True)

@@ -126,15 +126,71 @@ locally and offline.
 
 ```
 Voice-Assisstant-Task-Automation/
-├── core.py              Speech I/O — recognize_speech() and speak()
-├── actions.py           ~90 automation functions (the capability layer)
-├── command_map.py       COMMANDS dict: 159 spoken phrases → functions
-├── main.py              Command router; also runs standalone as a CLI
-├── api_server.py        FastAPI app — 5 REST endpoints + wake-word thread
-├── streamlit_app.py     Streamlit UI (thin HTTP client)
-├── voice_assistant.py   Legacy standalone CLI (superseded; see Known issues)
+│
+│   # the contract everything shares
+├── intent.py            Intent, ExecutionResult, AuthResult dataclasses
+├── config.py            wake words, timeouts, thresholds — no logic
+│
+│   # the four interfaces
+├── core.py              transcribe(), listen(), speak()      — speech I/O
+├── nlu/                 get_intent()                         — text → Intent
+│   ├── keyword.py         deterministic phrase matching (offline fallback)
+│   └── llm.py             free-speech understanding (Sprint 1, empty)
+├── auth.py              authenticate()                       — speaker verification (Sprint 2, stub)
+├── executor.py          execute()                            — Intent → action, registry dispatch
+│
+│   # orchestration and capabilities
+├── pipeline.py          wires the four together
+├── actions.py           ~90 OS automation functions
+├── browser_actions.py   Playwright browser control
+├── command_map.py       159 phrases → (action, target). Pure data.
+│
+│   # entry points
+├── streamlit_app.py     Streamlit UI (single process)
+├── main.py              CLI; also keeps process_command() for compatibility
+├── api_server.py        FastAPI adapter over the same pipeline
+│
+├── tools/               mic diagnostics, not part of the app
 ├── requirements.txt
-└── frontend-react/      Previous React + Vite UI, kept for reference
+└── frontend-react/      previous React + Vite UI, kept for reference
+```
+
+### The interfaces
+
+Each stage is replaceable because they share only the `Intent` contract —
+no stage imports another's implementation.
+
+```
+audio ──transcribe()──> text ──get_intent()──> Intent ──authenticate()──> Intent ──execute()──> Result
+       core.py                nlu/                     auth.py                    executor.py
+```
+
+An `Intent` is a plain description of what the user wants, created *before*
+anything happens, so it can be logged, confirmed or rejected first:
+
+```json
+{
+  "action": "open_app",
+  "target": "notepad",
+  "params": {},
+  "confidence": 1.0,
+  "raw_text": "please open notepad",
+  "source": "voice",
+  "engine": "keyword",
+  "sensitive": false
+}
+```
+
+The field names match what the LLM intent engine is specified to emit, so the
+keyword matcher and the LLM are drop-in replacements for one another.
+`sensitive` is what lets speaker verification challenge "shutdown" without
+challenging "scroll down".
+
+New capabilities register themselves rather than editing a dispatcher:
+
+```python
+@handler("open_app")
+def _open_app(intent): ...
 ```
 
 ---

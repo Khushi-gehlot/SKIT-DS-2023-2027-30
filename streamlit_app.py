@@ -18,9 +18,9 @@ import threading
 
 import streamlit as st
 
-from core import is_sleep_word, is_wake_word, recognize_speech, speak
+import pipeline
+from core import is_sleep_word, is_wake_word, speak, transcribe
 from command_map import COMMANDS
-from main import process_command
 
 
 # ----------------- Always-on wake word controller -----------------
@@ -83,7 +83,7 @@ class AlwaysOnController:
         """Wait for a wake word, then take commands until a sleep word."""
         try:
             while not self._stop.is_set():
-                text = recognize_speech()
+                text = transcribe()
                 if self._stop.is_set():
                     break
                 if not text:
@@ -97,7 +97,7 @@ class AlwaysOnController:
                 self.log(text, "Wake word detected.", True)
 
                 while not self._stop.is_set():
-                    cmd = recognize_speech()
+                    cmd = transcribe()
                     if self._stop.is_set() or not cmd:
                         continue
 
@@ -106,11 +106,8 @@ class AlwaysOnController:
                         self.log(cmd, "Session ended.", True)
                         break
 
-                    try:
-                        ok = process_command(cmd)
-                        self.log(cmd, "Executed." if ok else "Not recognised.", ok)
-                    except Exception as e:
-                        self.log(cmd, f"Error: {e}", False)
+                    result = pipeline.handle_text(cmd, source="voice")
+                    self.log(cmd, result.message, result.success)
         except Exception as e:
             self.log("(loop crashed)", str(e), False)
         finally:
@@ -124,16 +121,12 @@ def get_controller() -> AlwaysOnController:
 
 # ----------------- Command execution -----------------
 
-def run_command(text: str) -> tuple[bool, str]:
-    """Run a command in-process. Returns (success, message)."""
-    text = text.strip()
-    if not text:
+def run_command(text: str, source: str = "text") -> tuple[bool, str]:
+    """Run a command through the full pipeline. Returns (success, message)."""
+    if not text or not text.strip():
         return False, "No command given."
-    try:
-        ok = process_command(text)
-    except Exception as e:
-        return False, f"Error while executing '{text}': {type(e).__name__}: {e}"
-    return (True, f"Executed: {text}") if ok else (False, f"Unknown command: {text}")
+    result = pipeline.handle_text(text.strip(), source=source)
+    return result.success, result.message
 
 
 def log(heard: str, message: str, success: bool):
@@ -148,7 +141,7 @@ def log(heard: str, message: str, success: bool):
 def listen_once() -> tuple[bool, str, str]:
     """Wake word, then one command session. Returns (success, heard, message)."""
     speak("Say the wake word to start.")
-    wake = recognize_speech()
+    wake = transcribe()
     if not wake:
         return False, "(nothing heard)", "I did not hear the wake word."
     if not is_wake_word(wake):
@@ -159,7 +152,7 @@ def listen_once() -> tuple[bool, str, str]:
     heard = f"Wake: {wake}"
 
     while True:
-        cmd = recognize_speech()
+        cmd = transcribe()
         if not cmd:
             speak("I didn't catch that.")
             continue
