@@ -126,7 +126,12 @@ def run_command(text: str, source: str = "text") -> tuple[bool, str]:
     if not text or not text.strip():
         return False, "No command given."
     result = pipeline.handle_text(text.strip(), source=source)
-    return result.success, result.message
+    message = result.message
+    # Show which engine understood it - the whole point of the LLM layer is
+    # handling phrasings the keyword matcher cannot, and that should be visible.
+    if result.intent and result.intent.is_understood():
+        message += f"  ·  {result.intent.action}/{result.intent.target} via {result.intent.engine}"
+    return result.success, message
 
 
 def log(heard: str, message: str, success: bool):
@@ -188,6 +193,15 @@ with st.sidebar:
     st.subheader("VyasOS")
     st.success(f"{len(COMMANDS)} commands loaded")
     st.caption("Running in-process — no backend server.")
+
+    _info = pipeline.describe()
+    if _info["llm_ready"]:
+        st.info(f"Understanding: LLM ({_info['llm_model']}) + keyword fallback")
+    else:
+        st.warning(
+            "Understanding: keyword only — set MISTRAL_API_KEY in .env to "
+            "enable free-speech commands."
+        )
 
     st.divider()
     st.subheader("Always-on wake word")
