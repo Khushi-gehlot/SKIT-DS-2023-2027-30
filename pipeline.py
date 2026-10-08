@@ -78,9 +78,12 @@ def describe() -> dict:
     import config
     from command_map import ACTIONS
 
+    engines = nlu.active_engines()
     return {
         "stt": "google",
-        "nlu": "llm+keyword" if config.USE_LLM_INTENT else "keyword",
+        "nlu": "llm + keyword fallback" if engines["llm"] else "keyword only",
+        "llm_model": engines["llm_model"],
+        "llm_ready": engines["llm"],
         "auth": "enabled" if config.REQUIRE_SPEAKER_VERIFICATION else "disabled",
         "actions_known": ACTIONS,
         "actions_executable": executor.registered_actions(),
