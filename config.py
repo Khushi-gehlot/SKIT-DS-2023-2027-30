@@ -45,6 +45,40 @@ MIN_ENERGY_THRESHOLD = 100
 STT_LANGUAGE = "en-IN"
 
 
+# =============== SPEECH TO TEXT ENGINE ===============
+#
+# "whisper" runs locally - no internet, no API key, and markedly better with
+# proper nouns and Indian-accented English. Google transcribed "vyas" as
+# "guys" every single time, which is what broke the wake word.
+#
+# "google" is the old cloud engine, kept commented in core.py so the two can
+# be compared for the report.
+STT_ENGINE = os.environ.get("VYAS_STT", "whisper").lower()
+
+# tiny / base / small / medium / large-v3.
+#   tiny  ~75 MB   fastest, noticeably worse with names
+#   base  ~145 MB  the sweet spot for a voice assistant
+#   small ~480 MB  better, around 2-3x slower on CPU
+WHISPER_MODEL = os.environ.get("VYAS_WHISPER_MODEL", "base")
+
+# int8 keeps CPU inference fast with very little accuracy cost. Use "float16"
+# with device="cuda" if a GPU is available.
+WHISPER_DEVICE = os.environ.get("VYAS_WHISPER_DEVICE", "cpu")
+WHISPER_COMPUTE_TYPE = os.environ.get("VYAS_WHISPER_COMPUTE", "int8")
+
+# Forcing the language stops Whisper guessing wrong on short utterances -
+# "volume up" is sometimes detected as Welsh otherwise.
+WHISPER_LANGUAGE = os.environ.get("VYAS_WHISPER_LANG", "en")
+
+# Whisper hallucinates on silence, confidently returning things like "Thank
+# you." or "Thanks for watching!" when it hears nothing. These are discarded.
+WHISPER_HALLUCINATIONS = {
+    "thank you", "thanks for watching", "thank you.", "thanks for watching!",
+    "you", ".", "bye", "bye.", "thanks", "thank you for watching",
+    "subtitles by the amara.org community", "please subscribe",
+}
+
+
 # =============== WAKE WORD ===============
 #
 # Speech-to-text rarely returns "vyas" verbatim - Google transcribes it as
