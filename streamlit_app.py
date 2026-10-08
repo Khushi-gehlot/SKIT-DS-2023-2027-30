@@ -18,12 +18,9 @@ import threading
 
 import streamlit as st
 
-from core import recognize_speech, speak
+from core import is_sleep_word, is_wake_word, recognize_speech, speak
 from command_map import COMMANDS
 from main import process_command
-
-WAKE_WORDS = ["hello vyas", "hello bhai", "hey vyas"]
-SLEEP_WORDS = ["sleep", "go to sleep", "stop listening", "goodbye", "good night"]
 
 
 # ----------------- Always-on wake word controller -----------------
@@ -92,7 +89,7 @@ class AlwaysOnController:
                 if not text:
                     continue
 
-                if not any(w in text for w in WAKE_WORDS):
+                if not is_wake_word(text):
                     self.log(text, "Ignored — no wake word.", False)
                     continue
 
@@ -104,7 +101,7 @@ class AlwaysOnController:
                     if self._stop.is_set() or not cmd:
                         continue
 
-                    if any(w in cmd for w in SLEEP_WORDS):
+                    if is_sleep_word(cmd):
                         speak("Going back to sleep.")
                         self.log(cmd, "Session ended.", True)
                         break
@@ -154,7 +151,7 @@ def listen_once() -> tuple[bool, str, str]:
     wake = recognize_speech()
     if not wake:
         return False, "(nothing heard)", "I did not hear the wake word."
-    if not any(w in wake for w in WAKE_WORDS):
+    if not is_wake_word(wake):
         return False, wake, f"No wake word in '{wake}'. Say 'hello vyas' first."
 
     speak("I'm awake. Give me a command, or say sleep.")
@@ -166,7 +163,7 @@ def listen_once() -> tuple[bool, str, str]:
         if not cmd:
             speak("I didn't catch that.")
             continue
-        if any(w in cmd for w in SLEEP_WORDS):
+        if is_sleep_word(cmd):
             speak("Going back to sleep.")
             heard += f" | last: {cmd}"
             return True, heard, "Session ended by sleep word."
@@ -201,7 +198,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Always-on wake word")
-    st.caption("Listens continuously for " + ", ".join(f'"{w}"' for w in WAKE_WORDS) + ".")
+    st.caption('Listens continuously for "hello vyas" / "hey vyas" / "hello bhai".')
 
     running = controller.is_running()
     c1, c2 = st.columns(2)
