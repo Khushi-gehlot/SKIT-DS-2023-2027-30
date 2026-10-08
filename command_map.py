@@ -298,6 +298,57 @@ COMMANDS: dict[str, tuple[str, str | None]] = {
     "send mail": ("send_email", None),
     "compose email": ("send_email", None),
 
+
+    # ===================== BROWSER (Playwright) =====================
+    #
+    # These drive a browser the assistant stays in control of, so it can act
+    # inside a page. Commands carrying an argument (a URL, a link name, a
+    # number) are parsed by nlu/keyword.py rather than listed here.
+
+    "browser": ("browser_open", "url"),
+    "open browser": ("browser_open", "url"),
+
+    "click link": ("browser_click", "index"),
+    "click the link": ("browser_click", "index"),
+    "open link": ("browser_click", "index"),
+    "open the link": ("browser_click", "index"),
+
+    "list links": ("browser_links", None),
+    "show links": ("browser_links", None),
+    "show me the links": ("browser_links", None),
+    "what links are there": ("browser_links", None),
+    "read links": ("browser_links", None),
+
+    "go back": ("browser_nav", "back"),
+    "previous page": ("browser_nav", "back"),
+    "go forward": ("browser_nav", "forward"),
+    "next page": ("browser_nav", "forward"),
+    "reload": ("browser_nav", "reload"),
+    "refresh": ("browser_nav", "reload"),
+    "refresh page": ("browser_nav", "reload"),
+
+    "scroll page down": ("browser_scroll", "down"),
+    "scroll page up": ("browser_scroll", "up"),
+    "scroll to top": ("browser_scroll", "top"),
+    "go to top": ("browser_scroll", "top"),
+    "scroll to bottom": ("browser_scroll", "bottom"),
+    "go to bottom": ("browser_scroll", "bottom"),
+
+    "read page": ("browser_read", None),
+    "read this page": ("browser_read", None),
+    "read the page": ("browser_read", None),
+    "what does this page say": ("browser_read", None),
+
+    "page title": ("browser_title", None),
+    "what page is this": ("browser_title", None),
+
+    "close browser": ("browser_close", None),
+    "close the browser": ("browser_close", None),
+
+    "press enter": ("browser_submit", None),
+    "hit enter": ("browser_submit", None),
+    "submit": ("browser_submit", None),
+    "submit the form": ("browser_submit", None),
 }
 
 

@@ -30,6 +30,13 @@ _SAMPLED = {"open_settings": 12}
 _PARAMS = {
     "search_web": '"query": the search term, required',
     "open_website": '"query": the address, required only when target is "url"',
+    "browser_open": '"query": the address to open, required',
+    "browser_click": 'with target "index": "ordinal" = a position such as '
+                     '"second", "last" or "3". With target "text": "text" = '
+                     'the link wording the user said.',
+    "browser_type": '"value" = the text to type, required. "field" = which box '
+                    '(e.g. "search", "email"), or null if unstated. "submit" = '
+                    'true if the user also wants Enter pressed.',
 }
 
 _NOTES = {
@@ -38,6 +45,11 @@ _NOTES = {
                      'ms-settings URIs for the key.',
     "open_website": 'use target "url" with params.query for any site that is '
                     'not google or youtube.',
+    "browser_open": 'use this, not open_website, when the user wants to act '
+                    'inside the page afterwards - clicking links, scrolling, '
+                    'reading it back.',
+    "browser_scroll": 'scrolls the web page. Use the plain "scroll" action '
+                      'instead when no browser is involved.',
 }
 
 
