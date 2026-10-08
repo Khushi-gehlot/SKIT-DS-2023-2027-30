@@ -13,3 +13,4 @@ requests
 PyAudio
 streamlit
 playwright
+faster-whisper
