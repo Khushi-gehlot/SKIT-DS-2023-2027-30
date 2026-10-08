@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Khushi-gehlot/vyasa/intent_schema.json",
+  "title": "Vyasa Intent Object",
+  "description": "What the user wants, described before anything is done about it. Produced by the NLU layer (keyword matcher or LLM), consumed by auth and the executor. See INTENT_CONTRACT.md.",
+  "type": "object",
+  "version": "1.0",
+
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "The kind of operation. Must be one the executor has a handler for, or 'unknown'.",
+      "minLength": 1,
+      "examples": ["open_app", "volume", "power", "search_web", "unknown"]
+    },
+    "target": {
+      "type": ["string", "null"],
+      "description": "What the action applies to. Null for actions that take no target, such as screenshot or battery.",
+      "examples": ["notepad", "up", "shutdown", "display", null]
+    },
+    "params": {
+      "type": "object",
+      "description": "Extra data the action needs. Free-form by design: a search needs a query, a future browser click needs a selector.",
+      "default": {},
+      "examples": [{}, { "query": "python tutorials" }]
+    },
+    "confidence": {
+      "type": "number",
+      "description": "How sure the producer is. 1.0 is an exact phrase match. Below config.MIN_CONFIDENCE the caller should ask the user to repeat rather than guess.",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.0
+    },
+    "raw_text": {
+      "type": "string",
+      "description": "Exactly what was heard or typed. Kept for logging and for telling the user what was misunderstood.",
+      "default": ""
+    },
+    "source": {
+      "type": "string",
+      "description": "How the command arrived. Typed commands cannot be voice-verified, so this affects authentication.",
+      "enum": ["voice", "text"],
+      "default": "text"
+    },
+    "engine": {
+      "type": "string",
+      "description": "Which NLU produced this intent. Lets you measure how often the LLM beats the keyword matcher.",
+      "examples": ["keyword", "llm"],
+      "default": "keyword"
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601, second precision. Set when the intent is created.",
+      "examples": ["2026-10-09T14:30:00"]
+    },
+    "sensitive": {
+      "type": "boolean",
+      "description": "Whether this needs speaker verification before running. Derived from the action; shutting down qualifies, scrolling does not.",
+      "default": false
+    }
+  },
+
+  "required": ["action"],
+  "additionalProperties": false,
+
+  "examples": [
+    {
+      "action": "open_app",
+      "target": "notepad",
+      "params": {},
+      "confidence": 1.0,
+      "raw_text": "open notepad",
+      "source": "voice",
+      "engine": "keyword",
+      "timestamp": "2026-10-09T14:30:00",
+      "sensitive": false
+    },
+    {
+      "action": "search_web",
+      "target": "google",
+      "params": { "query": "python tutorials" },
+      "confidence": 1.0,
+      "raw_text": "search google for python tutorials",
+      "source": "voice",
+      "engine": "keyword",
+      "timestamp": "2026-10-09T14:31:00",
+      "sensitive": false
+    },
+    {
+      "action": "power",
+      "target": "shutdown",
+      "params": {},
+      "confidence": 0.92,
+      "raw_text": "can you shut the computer down please",
+      "source": "voice",
+      "engine": "llm",
+      "timestamp": "2026-10-09T14:32:00",
+      "sensitive": true
+    },
+    {
+      "action": "unknown",
+      "target": null,
+      "params": {},
+      "confidence": 0.0,
+      "raw_text": "make me a sandwich",
+      "source": "voice",
+      "engine": "keyword",
+      "timestamp": "2026-10-09T14:33:00",
+      "sensitive": false
+    }
+  ]
+}

@@ -1,104 +1,81 @@
-from core import speak, recognize_speech
-from command_map import COMMANDS
-from actions import search_google_voice, search_youtube_voice
+"""
+Command-line entry point, and the backwards-compatible process_command().
 
-import webbrowser
-import urllib.parse
+The routing logic that used to live here now lives in nlu/ (what the user
+means) and executor.py (how it gets done). What remains is a thin wrapper so
+existing callers keep working, plus a CLI for testing without the UI.
 
+    python main.py              voice loop, wake word required
+    python main.py --text       type commands instead of speaking
+"""
 
-# Dynamic Voice Search Functions
+from __future__ import annotations
 
-def search_google(query: str):
-    """Search a query on Google."""
-    url = "https://www.google.com/search?q=" + urllib.parse.quote(query)
-    speak(f"Searching Google for {query}")
-    webbrowser.open(url)
+import sys
 
+import pipeline
+from core import is_sleep_word, is_wake_word, speak, transcribe
 
-def search_youtube(query: str):
-    """Search a query on YouTube."""
-    url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote(query)
-    speak(f"Searching YouTube for {query}")
-    webbrowser.open(url)
-
-
-def open_website(site: str):
-    """Open a specific website."""
-    if not site.startswith("http"):
-        site = "https://" + site
-
-    speak(f"Opening {site}")
-    webbrowser.open(site)
-
-
-# Command Processing
 
 def process_command(command_text: str) -> bool:
     """
-    Try to match the user command text to known commands,
-    and execute the corresponding function.
-    Returns True if a command was found and executed, else False.
+    Run a command and report whether it was understood and executed.
+
+    Kept for compatibility with code written against the old router. New code
+    should call pipeline.handle_text(), which returns an ExecutionResult with
+    the intent and a message instead of a bare boolean.
     """
-
-    command_text = command_text.lower().strip()
-    print("Processing command:", command_text)
-
-
-    # Dynamic Search Commands
+    result = pipeline.handle_text(command_text)
+    print(result.message)
+    return result.success
 
 
-    if "search google for" in command_text:
-        query = command_text.split("search google for", 1)[1].strip()
-        if query:
-            search_google(query)
-        else:
-            search_google_voice()
-        return True
+# =============== CLI ===============
 
-    # ===== YOUTUBE SEARCH =====
-
-    if "search youtube for" in command_text:
-        query = command_text.split("search youtube for", 1)[1].strip()
-        if query:
-            search_youtube(query)
-        else:
-            search_youtube_voice()
-        return True
-
-    if "open website" in command_text:
-        site = command_text.replace("open website", "").strip()
-        if site:
-            open_website(site)
-            return True
+def _text_loop():
+    """Type commands. Useful for testing without a microphone."""
+    print("Type a command, or 'quit' to exit.")
+    while True:
+        try:
+            text = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if text.lower() in ("quit", "exit"):
+            break
+        if not text:
+            continue
+        result = pipeline.handle_text(text)
+        print(f"  {'ok' if result.success else 'fail'}: {result.message}")
+        if result.intent:
+            print(f"  intent: {result.intent}")
 
 
-    # Existing Command System
+def _voice_loop():
+    """Wake word, then commands until a sleep word."""
+    speak("Voice assistant ready. Say the wake word.")
+    while True:
+        text = transcribe()
+        if not text:
+            continue
 
-    if command_text in COMMANDS:
-        COMMANDS[command_text]()
-        return True
+        if not is_wake_word(text):
+            print("(ignored, no wake word):", text)
+            continue
 
-    # Longest key first, so specific phrases win over the generic ones they
-    # contain. Without this, "settings" swallows "display settings", "click"
-    # swallows "double click", "music" swallows "play music", and so on.
-    for key in sorted(COMMANDS, key=len, reverse=True):
-        if key in command_text:
-            func = COMMANDS[key]
-            return True
+        speak("I'm listening.")
+        while True:
+            command = transcribe()
+            if not command:
+                continue
+            if is_sleep_word(command):
+                speak("Going back to sleep.")
+                break
+            result, _ = pipeline.handle_text(command), None
+            speak("Done." if result.success else "I did not recognise that.")
 
-    speak("I do not recognize that command.")
-    return False
-
-
-# Voice Assistant Loop
 
 if __name__ == "__main__":
-
-    speak("Voice mode active. Say your command.")
-
-    while True:
-
-        text = recognize_speech()
-
-        if text:
-            process_command(text)
+    if "--text" in sys.argv:
+        _text_loop()
+    else:
+        _voice_loop()

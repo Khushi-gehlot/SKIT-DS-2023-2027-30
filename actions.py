@@ -29,6 +29,44 @@ def _open_ms_settings(page: str, description: str):
         speak(f"Sorry, I could not open {description} settings. Error: {e}")
 
 
+def open_settings_page(page: str):
+    """
+    Open a Windows Settings page by its ms-settings key.
+
+    Parameterised entry point for the executor: one handler covers all forty
+    settings pages instead of forty near-identical functions. An empty page
+    opens the Settings home screen.
+    """
+    _open_ms_settings(page, page.replace("-", " ") if page else "Settings")
+
+
+def ask_for_query(prompt: str) -> str | None:
+    """Speak a prompt and listen for the answer. Used for search terms."""
+    speak(prompt)
+    return recognize_speech()
+
+
+SEARCH_URLS = {
+    "google": "https://www.google.com/search?q=",
+    "youtube": "https://www.youtube.com/results?search_query=",
+}
+
+
+def search_web(engine: str, query: str):
+    """Search the web in the default browser."""
+    base = SEARCH_URLS.get(engine, SEARCH_URLS["google"])
+    speak(f"Searching {engine} for {query}")
+    webbrowser.open(base + urllib.parse.quote(query))
+
+
+def open_url(url: str):
+    """Open a URL in the default browser."""
+    if not url.startswith("http"):
+        url = "https://" + url
+    speak(f"Opening {url}")
+    webbrowser.open(url)
+
+
 # =============== SIMPLE ACTIONS (WEB / SCROLL / SCREEN) ===============
 
 def search_google_voice():
@@ -114,15 +152,17 @@ def scroll_up():
 
 
 def take_screenshot():
-    """Takes a screenshot and saves it in the current working directory."""
+    """Take a screenshot, save it, and return the path."""
     try:
         screenshot = pyautogui.screenshot()
         file_path = os.path.join(os.getcwd(), "screenshot.png")
         screenshot.save(file_path)
         speak(f"Screenshot saved as screenshot.png in {os.getcwd()}")
+        return file_path
     except Exception as e:
         print("Screenshot error:", e)
         speak(f"Sorry, I could not take a screenshot. Error: {e}")
+        return None
 
 
 # =============== POWER / BATTERY ===============
@@ -148,12 +188,14 @@ def restart_system():
 
 
 def show_battery():
+    """Speak the battery level and return the percentage."""
     battery = psutil.sensors_battery()
     if not battery:
         speak("Cannot read battery status.")
-        return
+        return None
     percent = battery.percent
     speak(f"Battery level is {percent} percent.")
+    return percent
 
 
 # =============== APPS ===============

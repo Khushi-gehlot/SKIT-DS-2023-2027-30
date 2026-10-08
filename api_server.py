@@ -6,16 +6,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from main import process_command
+import pipeline
 from command_map import COMMANDS
-from core import speak, recognize_speech
+from core import is_sleep_word, is_wake_word, speak, transcribe
 
 # ----------------- Wake words & global flags -----------------
 
-WAKE_WORDS = ["hello vyas", "hello bhai", "hey vyas"]
+# Wake and sleep words live in config.py and are matched by core.is_wake_word /
+# core.is_sleep_word, so this adapter cannot drift from the rest of the system.
 
 # Words that will end the active listening session (no need to say wake word again)
-SLEEP_WORDS = ["sleep", "go to sleep", "stop listening", "goodbye", "good night"]
 
 # Controls the background "always-on" listening loop
 always_on_flag = False
@@ -96,7 +96,7 @@ def _always_on_body():
     while always_on_flag:
         # 1) Wait for wake word
         speak("Listening for wake word.")
-        wake_text = recognize_speech()
+        wake_text = transcribe()
 
         if not always_on_flag:
             break
@@ -105,8 +105,7 @@ def _always_on_body():
             # Nothing heard, keep waiting
             continue
 
-        wake_lower = wake_text.lower()
-        if not any(wake in wake_lower for wake in WAKE_WORDS):
+        if not is_wake_word(wake_text):
             # Not a wake word, ignore
             print("Heard (ignored, no wake word):", wake_text)
             continue
@@ -119,7 +118,7 @@ def _always_on_body():
 
         # Inner loop: keep listening for commands until sleep word
         while always_on_flag:
-            cmd_text = recognize_speech()
+            cmd_text = transcribe()
 
             if not always_on_flag:
                 break
@@ -128,17 +127,16 @@ def _always_on_body():
                 speak("I didn't catch that. Please repeat your command.")
                 continue
 
-            cmd_lower = cmd_text.lower()
             print("Heard command:", cmd_text)
 
             # 3) Check for sleep/end-session words
-            if any(word in cmd_lower for word in SLEEP_WORDS):
+            if is_sleep_word(cmd_text):
                 speak("Okay, going back to sleep. Say the wake word when you need me again.")
                 break  # break inner loop → back to wake word listening
 
             # 4) Otherwise, treat it as a normal command
             try:
-                ok = process_command(cmd_text)
+                ok = pipeline.handle_text(cmd_text, source="voice").success
                 if ok:
                     speak("Command executed.")
                 else:
@@ -164,7 +162,7 @@ def run_command(req: CommandRequest):
         return CommandResponse(success=False, message="No command provided.")
 
     try:
-        success = process_command(cmd)
+        success = pipeline.handle_text(cmd).success
     except Exception as e:
         traceback.print_exc()
         return CommandResponse(
@@ -193,7 +191,7 @@ def listen_and_execute():
     """
     # STEP 1: Listen for wake word
     speak("Say the wake word to start.")
-    wake_text = recognize_speech()
+    wake_text = transcribe()
 
     if not wake_text:
         return ListenResponse(
@@ -202,8 +200,7 @@ def listen_and_execute():
             message="I did not hear the wake word. Please try again."
         )
 
-    wake_text_lower = wake_text.lower()
-    if not any(wake in wake_text_lower for wake in WAKE_WORDS):
+    if not is_wake_word(wake_text):
         # No wake word found
         return ListenResponse(
             success=False,
@@ -223,17 +220,16 @@ def listen_and_execute():
 
     # Inner loop: keep listening for commands until sleep word
     while True:
-        cmd_text = recognize_speech()
+        cmd_text = transcribe()
 
         if not cmd_text:
             speak("I didn't catch that. Please repeat your command.")
             continue
 
-        cmd_lower = cmd_text.lower()
         print("Heard command (listen endpoint):", cmd_text)
 
         # Check for sleep/end-session words
-        if any(word in cmd_lower for word in SLEEP_WORDS):
+        if is_sleep_word(cmd_text):
             speak("Okay, going back to sleep for this session.")
             last_cmd_text = cmd_text
             last_msg = "Session ended by sleep word."
@@ -241,7 +237,7 @@ def listen_and_execute():
 
         # Otherwise, treat as normal command
         try:
-            ok = process_command(cmd_text)
+            ok = pipeline.handle_text(cmd_text, source="voice").success
             last_cmd_text = cmd_text
             if ok:
                 msg = f"Executed: {cmd_text}"
