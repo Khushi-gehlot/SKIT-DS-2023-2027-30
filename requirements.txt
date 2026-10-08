@@ -12,3 +12,4 @@ wikipedia
 requests
 PyAudio
 streamlit
+playwright
