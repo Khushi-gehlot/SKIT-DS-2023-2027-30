@@ -1,11 +1,12 @@
 # VyasOS — Voice Assistant for Task Automation
 
-A hands-free desktop assistant for Windows. Speak a wake word, give a command, and
-the machine does it — opens apps, changes system settings, controls the cursor,
-manages volume and media, takes screenshots, searches the web, or sends an email.
+A hands-free desktop assistant for Windows, built as an **accessibility tool**.
+The goal is that someone who cannot comfortably use a mouse and keyboard can
+still operate the whole machine by voice — open apps, change system settings,
+move and click the cursor, manage volume and media, browse the web, and send
+email, without touching the hardware.
 
-Built as a FastAPI backend that owns speech and OS automation, with a Streamlit
-front end as a thin client over its REST API.
+Speak a wake word, give a command, and the machine does it.
 
 ---
 
@@ -21,6 +22,37 @@ front end as a thin client over its REST API.
 - **Spoken feedback** — offline text-to-speech confirms each action.
 - **Confirmation prompts** on destructive actions (shutdown and restart ask for a
   spoken "yes").
+- **Browser control** — a Playwright-driven browser that can act *inside* a web
+  page, not just open it (see below).
+
+### Two levels of web control
+
+The project deliberately keeps both, because they solve different problems.
+
+**`webbrowser` (standard library)** — hands a URL to the default browser and
+forgets about it. Instant, no dependencies. Right for "open youtube",
+"search google for X". It cannot see or touch the page afterwards.
+
+**Playwright (`browser_actions.py`)** — drives a real Chromium window the
+assistant stays in control of. This is what makes genuinely hands-free browsing
+possible, because the hard part of using the web without a mouse is not opening
+a page, it is everything after: clicking the right link, scrolling to the right
+place, choosing an option, reading content back.
+
+Currently implemented:
+
+| Command | What it does |
+|---|---|
+| `browser_open(url)` | Navigate the controlled browser |
+| `browser_search_google(query)` | Search without leaving the session |
+| `browser_search_youtube(query)` | Search YouTube |
+| `browser_play_first_youtube_result(query)` | Search, wait for results, **click the first video** |
+| `browser_page_title()` | Read the current page title aloud |
+| `browser_close()` | Close the browser |
+
+A single Chromium window is launched on first use and reused, so the user keeps
+one continuous session rather than a new window per command. The browser runs
+visibly (`headless=False`) so the user can see what the assistant is doing.
 
 ---
 
@@ -122,6 +154,39 @@ pip install -r requirements.txt
 
 If `PyAudio` fails to build, install a prebuilt wheel instead:
 `pip install pipwin && pipwin install pyaudio`
+
+### Browser automation (Playwright)
+
+`pip install -r requirements.txt` installs the `playwright` Python package, but
+that package is only a client. The browser engine it drives is a separate
+download and **must be installed with a second command**:
+
+```bash
+python -m playwright install chromium
+```
+
+Roughly 120 MB, one time. Without it, every browser command fails with
+"Playwright is not set up yet" — the rest of the assistant is unaffected.
+
+**Dependencies pulled in by `playwright`:**
+
+| Package | Role |
+|---|---|
+| `playwright` | Python client library (the API used in `browser_actions.py`) |
+| `greenlet` | Lets the synchronous API block on async operations |
+| `pyee` | Event emitter used for browser events |
+| Node.js driver | Bundled inside the `playwright` wheel; no separate install |
+| Chromium | The actual browser — the 120 MB download above |
+
+Notes:
+
+- If the install reports a failure for **Chrome Headless Shell**, ignore it.
+  The assistant launches a visible browser (`headless=False`), so the headless
+  component is not used.
+- Browsers are cached in `%LOCALAPPDATA%\ms-playwright`, outside the project,
+  so they survive deleting and recreating the virtual environment.
+- Only Chromium is needed. `python -m playwright install` with no argument
+  would also fetch Firefox and WebKit, roughly 400 MB for no benefit here.
 
 ### Environment variables
 
@@ -245,11 +310,39 @@ then add one or more phrases to `COMMANDS` in `command_map.py`.
 - **Speech recognition requires internet** and is accuracy-limited by the
   5-second capture window and ambient noise.
 
-## Possible future work
+## Roadmap
 
-Fuzzy matching (RapidFuzz) for natural phrasing; API key authentication;
-offline speech recognition (Vosk or Whisper) to remove the cloud dependency;
-per-user configurable wake words; a command usage log.
+### In-page browsing by voice
+
+The accessibility goal is that a user never needs the mouse. Opening a page is
+solved; acting within it is the remaining work. Planned commands, all of which
+Playwright supports and `webbrowser` cannot:
+
+| Spoken command | Playwright mechanism |
+|---|---|
+| "open the first link" | `page.locator("a").first.click()` |
+| "scroll down" / "scroll up" | `page.mouse.wheel()` — scrolls the page, not the OS |
+| "click sign in" | `page.get_by_role("button", name="sign in").click()` |
+| "select the second option" | `page.locator("option").nth(1).select_option()` |
+| "type my email" | `page.get_by_label("Email").fill(...)` |
+| "read this page to me" | `page.inner_text("main")` piped through `speak()` |
+| "go back" / "go forward" | `page.go_back()` / `page.go_forward()` |
+| "show me the links" | enumerate links and number them, then "click number three" |
+
+The numbered-links idea matters most: naming a link out loud is unreliable, so
+listing visible links with numbers and letting the user pick one by number is
+far more robust for someone who cannot point at the screen.
+
+Note that today's "scroll down" command uses PyAutoGUI, which scrolls whatever
+window has OS focus. The Playwright version would scroll a specific page
+deterministically — more reliable, and it works even if focus moves.
+
+### Other
+
+Fuzzy matching (RapidFuzz) for natural phrasing; offline speech recognition
+(Vosk or Whisper) to remove the cloud dependency and improve proper-noun
+accuracy; a screen-reader-friendly UI mode; per-user configurable wake words;
+dwell-free confirmation for destructive actions; a command usage log.
 
 ---
 
