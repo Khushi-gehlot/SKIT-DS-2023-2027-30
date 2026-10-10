@@ -164,7 +164,7 @@ def create_charts(students, timeline_activity, interval):
     return Image(img_buffer, width=500, height=170)
 
 
-def generate_pdf(interval="weekly", weeks_ago=0):
+def generate_pdf(interval="weekly", weeks_ago=1):
     repo_name, branch_name = get_repo_info()
     students, timeline_activity, student_logs, scope_title = get_git_metrics(interval, weeks_ago)
 
