@@ -59,9 +59,23 @@ def handle_audio(
 
 def _authorise_and_execute(intent: Intent, audio=None) -> ExecutionResult:
     """Gate the intent, then run it. The only place auth and execution meet."""
+    import config
+
     if not intent.is_understood():
         return ExecutionResult.fail(
             f"I do not recognise that command: {intent.raw_text}", intent
+        )
+
+    # Understood, but not firmly enough to act on. Hand it back for the
+    # caller to confirm rather than running it.
+    #
+    # Acting on a weak guess is the wrong trade for this assistant: the user
+    # may not be able to undo a wrong action quickly, so asking costs a
+    # second and guessing wrong can cost a lot more.
+    if intent.confidence < config.MIN_CONFIDENCE:
+        return ExecutionResult.confirm(
+            f"Sorry, I did not quite catch that. Did you mean {describe_intent(intent)}?",
+            intent,
         )
 
     decision = auth.authenticate(intent, audio=audio)
@@ -70,6 +84,50 @@ def _authorise_and_execute(intent: Intent, audio=None) -> ExecutionResult:
             decision.message or "Sorry, I could not verify your voice.", intent
         )
 
+    return executor.execute(intent)
+
+
+def describe_intent(intent: Intent) -> str:
+    """
+    Phrase an intent the way a person would say it.
+
+    "open_app/notepad" is not something to read aloud; "open Notepad" is.
+    """
+    target = (intent.target or "").replace("_", " ").replace("-", " ")
+    query = intent.params.get("query") or intent.params.get("text") or ""
+
+    phrasings = {
+        "open_app": f"open {target}",
+        "open_folder": f"open the {target} folder",
+        "open_settings": f"open {target} settings",
+        "open_website": f"open {query or target}",
+        "search_web": f"search {target} for {query}" if query else f"search {target}",
+        "cursor_move": f"move the cursor {target}",
+        "cursor_click": f"{target} click",
+        "scroll": f"scroll {target}",
+        "screenshot": "take a screenshot",
+        "window": f"{target} the window".replace("show desktop the window", "show the desktop"),
+        "volume": f"turn the volume {target}" if target in ("up", "down") else f"{target} the volume",
+        "media": f"{target.replace('play pause', 'play or pause')} the media",
+        "power": f"{target} the computer",
+        "battery": "check the battery",
+        "send_email": "send an email",
+    }
+    return phrasings.get(intent.action, f"{intent.action} {target}".strip())
+
+
+def confirm_and_execute(intent: Intent, audio=None) -> ExecutionResult:
+    """
+    Run an intent the user has just confirmed.
+
+    Skips the confidence check - they have said this is what they meant, so
+    the guess is no longer a guess. Authentication still applies.
+    """
+    decision = auth.authenticate(intent, audio=audio)
+    if not decision.allowed:
+        return ExecutionResult.fail(
+            decision.message or "Sorry, I could not verify your voice.", intent
+        )
     return executor.execute(intent)
 
 
@@ -88,4 +146,5 @@ def describe() -> dict:
         "auth": "enabled" if config.REQUIRE_SPEAKER_VERIFICATION else "disabled",
         "actions_known": ACTIONS,
         "actions_executable": executor.registered_actions(),
+        "stats": nlu.stats(),
     }

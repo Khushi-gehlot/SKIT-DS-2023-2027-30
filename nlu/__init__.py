@@ -35,7 +35,39 @@ from intent import Intent
 
 from . import keyword, llm
 
-__all__ = ["get_intent", "get_intents", "active_engines"]
+__all__ = ["get_intent", "get_intents", "active_engines", "stats", "reset_stats"]
+
+
+# How each utterance was resolved. Counting this is the only way to answer
+# "does the LLM actually earn its place?" - the keyword matcher handles most
+# traffic, so the LLM's value is entirely in the tail it rescues.
+_STATS = {
+    "total": 0,
+    "keyword_exact": 0,      # resolved instantly, no API call
+    "llm_confident": 0,      # the LLM understood something keywords could not
+    "llm_low_confidence": 0, # the LLM guessed, but not firmly enough to run
+    "keyword_fallback": 0,   # partial phrase match after the LLM declined
+    "unknown": 0,            # nothing understood it
+    "llm_errors": 0,         # the engine raised rather than returning unknown
+}
+
+
+def stats() -> dict[str, int | float]:
+    """Counts of how utterances were resolved, plus derived percentages."""
+    out = dict(_STATS)
+    total = out["total"] or 1
+    out["llm_rescue_rate"] = round(
+        100.0 * out["llm_confident"] / total, 1
+    )
+    out["understood_rate"] = round(
+        100.0 * (total - out["unknown"]) / total, 1
+    )
+    return out
+
+
+def reset_stats():
+    for key in _STATS:
+        _STATS[key] = 0
 
 
 def get_intent(text: str, source: str = "text") -> Intent:
@@ -48,26 +80,53 @@ def get_intent(text: str, source: str = "text") -> Intent:
     if not text or not text.strip():
         return Intent.unknown(raw_text=text or "", source=source)
 
-    # --- 1. exact keyword match: instant, skip the model entirely ---
-    if config.KEYWORD_FAST_PATH:
-        quick = keyword.get_intent(text, source)
-        if quick.is_understood() and quick.confidence >= config.CONFIDENCE_EXACT:
-            return quick
+    _STATS["total"] += 1
+
+    # --- 1. keyword match ---
+    # Computed once and reused. An exact hit returns immediately; anything
+    # weaker is kept as the fallback for step 3 rather than being recomputed.
+    matched = keyword.get_intent(text, source)
+    if (
+        config.KEYWORD_FAST_PATH
+        and matched.is_understood()
+        and matched.confidence >= config.CONFIDENCE_EXACT
+    ):
+        _STATS["keyword_exact"] += 1
+        return matched
 
     # --- 2. the LLM, for everything phrased freely ---
+    hedged: Intent | None = None
     if config.USE_LLM_INTENT and llm.is_available():
         try:
             guess = llm.get_intent(text, source)
-            if guess.is_understood() and guess.confidence >= config.LLM_MIN_CONFIDENCE:
-                return guess
-            # Understood poorly or not at all: let keywords have a go.
+            if guess.is_understood():
+                if guess.confidence >= config.LLM_MIN_CONFIDENCE:
+                    _STATS["llm_confident"] += 1
+                    return guess
+                # Understood, but not firmly. Hold it: if the keyword matcher
+                # has nothing better, this guess is still worth showing the
+                # user - it is more useful than "I do not recognise that".
+                hedged = guess
         except Exception as e:
             # Defensive: llm.get_intent already swallows its own failures, but
             # a bug in it must not take the assistant down.
+            _STATS["llm_errors"] += 1
             print(f"LLM engine raised ({type(e).__name__}: {e}); using keywords.")
 
     # --- 3. keyword fallback, partial matches allowed ---
-    return keyword.get_intent(text, source)
+    if matched.is_understood():
+        _STATS["keyword_fallback"] += 1
+        return matched
+
+    # --- 4. nothing solid: return the hedged guess if there was one ---
+    # It keeps its low confidence, which is what stops the pipeline running
+    # it. The user is told what was guessed instead.
+    if hedged is not None:
+        _STATS["llm_low_confidence"] += 1
+        return hedged
+
+    _STATS["unknown"] += 1
+    return matched
 
 
 def get_intents(text: str, source: str = "text") -> list[Intent]:

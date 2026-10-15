@@ -44,6 +44,14 @@ CALIBRATION_SECONDS = 1.0   # ambient-noise sampling on first listen
 # trigger on nothing at all. Never go below this.
 MIN_ENERGY_THRESHOLD = 100
 
+# The recogniser adapts its threshold as it listens, which is useful, but it
+# only ever drifts upward in a room with background noise or an assistant that
+# talks through speakers. These two settings stop it going permanently deaf:
+# recalibrate from scratch every so often, and never let the threshold exceed
+# a level a normal speaking voice can clear.
+RECALIBRATE_EVERY = 15      # listens between full recalibrations
+MAX_ENERGY_THRESHOLD = 1200
+
 STT_LANGUAGE = "en-IN"
 
 
@@ -117,10 +125,66 @@ SLEEP_WORDS = [
 ]
 
 
+# =============== CONVERSATION ===============
+#
+# What the assistant says, and what it accepts as an answer. Kept here so the
+# personality can be adjusted without touching logic.
+
+USER_TITLE = "admin"        # what the assistant calls the user
+
+GREETINGS_SPOKEN = [
+    "Hey {user}, how can I help you?",
+    "Yes {user}, what would you like me to do?",
+    "I'm listening, {user}.",
+]
+
+ACKNOWLEDGEMENTS = ["Done.", "Got it.", "Okay.", "Sure."]
+
+NOT_UNDERSTOOD = [
+    "Sorry, I did not catch that.",
+    "I did not understand that one.",
+]
+
+FAREWELLS = ["Going back to sleep.", "Okay, let me know if you need me."]
+
+# Answers to "did you mean X?". Matched as whole words so "no" inside another
+# word cannot flip a yes into a no.
+YES_WORDS = [
+    "yes", "yeah", "yep", "yup", "correct", "right", "sure", "ok", "okay",
+    "do it", "go ahead", "confirm", "haan", "ha",
+]
+
+NO_WORDS = [
+    "no", "nope", "nah", "wrong", "cancel", "stop", "never mind",
+    "nevermind", "forget it", "nahi",
+]
+
+# How long to wait for a yes/no before giving up on the question.
+CONFIRM_TIMEOUT = 6
+
+# Consecutive silences before a button-started session gives up. The page is
+# blocked while it runs, so it cannot listen indefinitely.
+SESSION_SILENCE_LIMIT = 3
+
+# How close a short utterance must be to the name to count as the wake word.
+# 1.0 is exact; lower accepts more mishearings but risks waking on nothing.
+WAKE_FUZZY_CUTOFF = 0.7
+
+# Pause after the assistant finishes speaking before opening the microphone.
+# Without it the tail of its own voice bleeds into the recording and the
+# recogniser hears the assistant instead of the user.
+SPEAK_SETTLE_SECONDS = 0.4
+
+
 # =============== NLU ===============
 
-# Below this, treat a match as too uncertain to act on and ask again.
-MIN_CONFIDENCE = 0.5
+# Below this the assistant asks "did you mean X?" instead of acting.
+#
+# Deliberately above CONFIDENCE_PARTIAL, so a phrase merely *contained* in a
+# longer sentence gets confirmed rather than executed. "please open the
+# notepad thing" is probably right - but probably is not good enough when the
+# user may not be able to undo a wrong action quickly.
+MIN_CONFIDENCE = 0.85
 
 # Confidence reported by the keyword matcher for each match type.
 CONFIDENCE_EXACT = 1.0      # the whole utterance is a known phrase
