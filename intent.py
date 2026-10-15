@@ -212,12 +212,19 @@ class ExecutionResult:
     intent: Intent | None = None
     data: Any = None
 
+    # True when the assistant understood something but is not sure enough to
+    # act. `intent` then holds what it thinks was meant, and the caller is
+    # expected to ask the user before running it. Optional with a default, so
+    # adding it does not break existing consumers.
+    needs_confirmation: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "message": self.message,
             "intent": self.intent.to_dict() if self.intent else None,
             "data": self.data,
+            "needs_confirmation": self.needs_confirmation,
         }
 
     @classmethod
@@ -227,6 +234,13 @@ class ExecutionResult:
     @classmethod
     def fail(cls, message: str, intent: Intent | None = None):
         return cls(success=False, message=message, intent=intent)
+
+    @classmethod
+    def confirm(cls, message: str, intent: Intent):
+        """Not run yet - the caller should ask the user first."""
+        return cls(
+            success=False, message=message, intent=intent, needs_confirmation=True
+        )
 
 
 @dataclass

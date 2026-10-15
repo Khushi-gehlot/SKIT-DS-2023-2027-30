@@ -18,7 +18,11 @@ Public interface:
 
 from __future__ import annotations
 
+import difflib
 import io
+import random
+import re
+import time
 import threading
 
 import pyttsx3
@@ -57,15 +61,68 @@ def speak(text: str):
         # If TTS fails, log it and carry on. Losing the voice is not fatal.
         print("TTS error:", e)
 
+    # Let the speakers fall silent before anyone opens the microphone,
+    # otherwise the tail of this sentence lands in the next recording.
+    time.sleep(config.SPEAK_SETTLE_SECONDS)
+
 
 # =============== WAKE WORD ===============
 
 def is_wake_word(text: str | None) -> bool:
-    """True if the recognised text contains any accepted wake phrase."""
+    """
+    True if the recognised text contains any accepted wake phrase.
+
+    A bare wake word is the hardest thing in the whole system to recognise:
+    "nova" is under half a second of audio with no surrounding context, where
+    a command gives the engine several seconds to work with. So short
+    utterances also get a fuzzy pass - if the whole thing is one or two words
+    and closely resembles the name, treat it as the wake word.
+    """
     if not text:
         return False
-    lowered = text.lower()
-    return any(w in lowered for w in config.WAKE_WORDS)
+
+    lowered = text.lower().strip()
+    if any(w in lowered for w in config.WAKE_WORDS):
+        return True
+
+    # Fuzzy pass, short utterances only. Applying this to a long sentence
+    # would make almost anything wake the assistant.
+    words = re.sub(r"[^a-z0-9 ]", "", lowered).split()
+    if not words or len(words) > 2:
+        return False
+
+    candidate = words[-1]           # "hey nova" -> "nova"
+    return bool(
+        difflib.get_close_matches(
+            candidate, config.NAME_VARIANTS, n=1, cutoff=config.WAKE_FUZZY_CUTOFF
+        )
+    )
+
+
+def strip_wake_word(text: str) -> str:
+    """
+    Remove the wake phrase, leaving whatever command followed it.
+
+    This is what lets "nova open notepad" work as one breath. Saying both
+    together is not just convenient - it is markedly more reliable, because
+    the engine gets a full phrase of audio instead of one short word.
+    """
+    remainder = text.lower().strip()
+    for phrase in sorted(config.WAKE_WORDS, key=len, reverse=True):
+        if phrase in remainder:
+            remainder = remainder.replace(phrase, " ", 1)
+            break
+    else:
+        words = remainder.split()
+        if words and difflib.get_close_matches(
+            re.sub(r"[^a-z0-9]", "", words[0]),
+            config.NAME_VARIANTS, n=1, cutoff=config.WAKE_FUZZY_CUTOFF,
+        ):
+            remainder = " ".join(words[1:])
+
+    # Drop a leading filler so "nova, please open notepad" resolves cleanly.
+    remainder = re.sub(r"^[\s,.]*(please|can you|could you|now)\b", "", remainder)
+    return remainder.strip(" ,.")
 
 
 def is_sleep_word(text: str | None) -> bool:
@@ -76,14 +133,61 @@ def is_sleep_word(text: str | None) -> bool:
     return any(w in lowered for w in config.SLEEP_WORDS)
 
 
+# =============== CONVERSATION ===============
+
+def _contains_word(text: str, phrases: list[str]) -> bool:
+    """
+    Whole-word match.
+
+    Substring matching would be dangerous here: "no" appears inside "notepad"
+    and "now", so a plain `in` check could turn a yes into a no.
+    """
+    lowered = f" {re.sub(r'[^a-z0-9 ]', ' ', text.lower())} "
+    return any(f" {p} " in lowered for p in phrases)
+
+
+def is_yes(text: str | None) -> bool:
+    """Did the user agree?"""
+    return bool(text) and _contains_word(text, config.YES_WORDS)
+
+
+def is_no(text: str | None) -> bool:
+    """Did the user decline?"""
+    return bool(text) and _contains_word(text, config.NO_WORDS)
+
+
+def greeting() -> str:
+    """A spoken greeting, varied so it does not sound like a recording."""
+    return random.choice(config.GREETINGS_SPOKEN).format(user=config.USER_TITLE)
+
+
+def acknowledgement() -> str:
+    return random.choice(config.ACKNOWLEDGEMENTS)
+
+
+def not_understood() -> str:
+    return random.choice(config.NOT_UNDERSTOOD)
+
+
+def farewell() -> str:
+    return random.choice(config.FAREWELLS)
+
+
 # =============== SPEECH TO TEXT ===============
 
 # One Recognizer for the whole process, so the noise calibration it learns is
 # not thrown away on every call.
 _recognizer = sr.Recognizer()
-_recognizer.dynamic_energy_threshold = True
+# Deliberately off. Left on, the threshold drifts with every listen - down to
+# single digits in a quiet room, which makes the recogniser fire on silence
+# and send noise to the engine ("could not understand the audio"), and upward
+# in a noisy one until a normal voice cannot clear it. A value measured by
+# calibration and held steady is far more predictable; changing conditions are
+# handled by recalibrating periodically instead.
+_recognizer.dynamic_energy_threshold = False
 _recognizer.pause_threshold = config.PAUSE_THRESHOLD
 _calibrated = False
+_listens_since_calibration = 0
 
 
 def list_microphones():
@@ -94,7 +198,7 @@ def list_microphones():
 
 def calibrate(duration: float = config.CALIBRATION_SECONDS):
     """Learn the room's noise floor. Called automatically on first listen."""
-    global _calibrated
+    global _calibrated, _listens_since_calibration
     try:
         with sr.Microphone(device_index=config.MIC_INDEX) as source:
             _recognizer.adjust_for_ambient_noise(source, duration=duration)
@@ -104,6 +208,7 @@ def calibrate(duration: float = config.CALIBRATION_SECONDS):
             _recognizer.energy_threshold = config.MIN_ENERGY_THRESHOLD
         print(f"Mic calibrated, energy threshold = {_recognizer.energy_threshold:.0f}")
         _calibrated = True
+        _listens_since_calibration = 0
     except Exception as e:
         print("Calibration failed:", e)
 
@@ -122,13 +227,30 @@ def listen(
     Never raises. Silence, a missing microphone or a failed recognition all
     return (None, ...) so callers can treat them uniformly.
     """
-    global _calibrated
+    global _calibrated, _listens_since_calibration
     if not _calibrated:
         calibrate()
 
+    # One Recognizer lives for the whole session, so recalibrate occasionally:
+    # the room gets noisier or quieter, and a value measured once at startup
+    # stops reflecting it.
+    if _listens_since_calibration >= config.RECALIBRATE_EVERY:
+        _calibrated = False
+        _listens_since_calibration = 0
+        calibrate()
+
+    # Keep the threshold inside a sane band whatever happened to it. Too low
+    # and it records silence; too high and it ignores speech.
+    if _recognizer.energy_threshold < config.MIN_ENERGY_THRESHOLD:
+        _recognizer.energy_threshold = config.MIN_ENERGY_THRESHOLD
+    elif _recognizer.energy_threshold > config.MAX_ENERGY_THRESHOLD:
+        _recognizer.energy_threshold = config.MAX_ENERGY_THRESHOLD
+
+    _listens_since_calibration += 1
+
     try:
         with sr.Microphone(device_index=config.MIC_INDEX) as source:
-            print("Listening...")
+            print(f"Listening... (threshold {_recognizer.energy_threshold:.0f})")
             audio = _recognizer.listen(
                 source, timeout=timeout, phrase_time_limit=phrase_time_limit
             )
