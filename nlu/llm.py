@@ -120,12 +120,32 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-def _call_llm(text: str) -> str | None:
-    """Send one classification request. Returns the raw reply, or None."""
+def _call_llm(text: str, json_mode: bool = True) -> str | None:
+    """
+    Send one classification request. Returns the raw reply, or None.
+
+    json_mode asks the provider to guarantee valid JSON. It is worth having,
+    but providers reject some prompts outright with "Failed to generate JSON"
+    - so a 400 retries once without it. The response is parsed leniently
+    anyway, which makes the guarantee a convenience rather than a
+    requirement.
+    """
     found = active_provider()
     if found is None:
         return None
     name, key, url, model = found
+
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt()},
+            {"role": "user", "content": text},
+        ],
+        "temperature": config.LLM_TEMPERATURE,
+        "max_tokens": config.LLM_MAX_TOKENS,
+    }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
 
     try:
         response = requests.post(
@@ -134,16 +154,7 @@ def _call_llm(text: str) -> str | None:
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt()},
-                    {"role": "user", "content": text},
-                ],
-                "temperature": config.LLM_TEMPERATURE,
-                "max_tokens": config.LLM_MAX_TOKENS,
-                "response_format": {"type": "json_object"},
-            },
+            json=body,
             timeout=config.LLM_TIMEOUT,
         )
     except requests.exceptions.Timeout:
@@ -166,6 +177,12 @@ def _call_llm(text: str) -> str | None:
         # Hugging Face parks idle models and wakes them on demand.
         print(f"{name} model is still loading; falling back to keywords.")
         return None
+    if response.status_code == 400 and json_mode:
+        # Some prompts make strict JSON mode fail. Ask again without it and
+        # lean on the lenient parser instead of losing the answer.
+        print(f"{name} rejected JSON mode; retrying without it.")
+        return _call_llm(text, json_mode=False)
+
     if not response.ok:
         print(
             f"{name} returned HTTP {response.status_code}: "

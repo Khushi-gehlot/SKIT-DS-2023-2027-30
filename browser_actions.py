@@ -50,9 +50,22 @@ except ImportError:  # pragma: no cover - depends on install
     PLAYWRIGHT_AVAILABLE = False
 
 
+CDP_PORT = 9222           # where a debuggable browser listens
 NAV_TIMEOUT = 20_000      # page loads can be slow on bad connections
 ACTION_TIMEOUT = 10_000   # finding and clicking an element should not be
 MAX_LINKS = 25            # how many links we will read out at once
+
+# Navigation chrome that appears on nearly every page. Offering these as
+# "the first link" is never what the user meant.
+BOILERPLATE = {
+    "skip to main content", "skip to content", "accessibility help",
+    "accessibility feedback", "sign in", "sign up", "log in", "login",
+    "privacy", "terms", "settings", "help", "about", "home", "menu",
+    "search", "images", "videos", "news", "maps", "more", "all", "tools",
+    "ai mode", "feedback", "advertising", "business", "how search works",
+    "report inappropriate predictions", "privacy policy", "terms of service",
+    "next", "previous", "back", "skip navigation",
+}
 
 
 class BrowserError(RuntimeError):
@@ -64,6 +77,11 @@ class Link:
     index: int
     text: str
     href: str | None
+    # The element this came from. Re-finding a link by its text is
+    # unreliable - pages routinely contain hidden duplicates, and clicking
+    # the wrong one fails with "something may be covering it". Holding the
+    # handle means we click exactly what we offered the user.
+    element: object | None = None
 
 
 # =============== WORKER THREAD ===============
@@ -139,6 +157,83 @@ class _Session:
         self._playwright = None
         self._browser = None
         self._page = None
+        self._attached = False      # driving the user's own browser?
+
+    # --- attaching to the browser the user is actually looking at ---
+
+    def attach(self, port: int = CDP_PORT):
+        """
+        Drive the user's real browser instead of a private one.
+
+        This is the difference between an automation toy and an accessibility
+        tool. A browser Playwright launched itself is isolated: no sign-ins,
+        no open tabs, and nothing the user can see. Attaching over the Chrome
+        DevTools Protocol means "open the second link" acts on the page in
+        front of them, with their sessions already live.
+
+        Requires the browser to have been started with
+        --remote-debugging-port, which launch_debuggable_browser() does.
+        """
+        if not PLAYWRIGHT_AVAILABLE:
+            raise BrowserError("Playwright is not installed.")
+
+        self._teardown()
+        try:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.connect_over_cdp(
+                f"http://localhost:{port}"
+            )
+        except Exception as e:
+            self._teardown()
+            raise BrowserError(
+                "I could not connect to your browser. Say 'start browser' "
+                "first so I can open one I am able to control."
+            ) from e
+
+        contexts = self._browser.contexts
+        if not contexts or not contexts[0].pages:
+            self._teardown()
+            raise BrowserError("Your browser has no open tabs for me to use.")
+
+        # Prefer the tab the user is actually looking at.
+        self._page = self._active_page(contexts[0])
+        self._page.set_default_timeout(ACTION_TIMEOUT)
+        self._page.set_default_navigation_timeout(NAV_TIMEOUT)
+        self._attached = True
+        return self._page
+
+    @staticmethod
+    def _active_page(context):
+        """
+        The frontmost tab.
+
+        CDP gives no direct "active tab", but a hidden tab reports
+        visibilityState "hidden", so the visible one can be identified.
+        """
+        pages = [pg for pg in context.pages if not pg.is_closed()]
+        for page in pages:
+            try:
+                if page.evaluate("document.visibilityState") == "visible":
+                    return page
+            except Exception:
+                continue
+        return pages[-1]
+
+    def refresh_active_page(self):
+        """Re-read which tab is in front - the user may have switched."""
+        if not self._attached or not self._browser:
+            return self.page()
+        try:
+            contexts = self._browser.contexts
+            if contexts and contexts[0].pages:
+                self._page = self._active_page(contexts[0])
+                self._page.set_default_timeout(ACTION_TIMEOUT)
+        except Exception:
+            pass
+        return self.page()
+
+    def is_attached(self) -> bool:
+        return self._attached and self._alive()
 
     # --- lifecycle ---
 
@@ -202,6 +297,7 @@ class _Session:
             except Exception:
                 pass
         self._page = self._browser = self._playwright = None
+        self._attached = False
 
     def is_running(self) -> bool:
         return self._alive()
@@ -264,17 +360,45 @@ class _Session:
     # --- links ---
 
     def links(self, limit: int = MAX_LINKS) -> list[Link]:
-        """Visible links with usable text, in page order."""
+        """
+        Links worth offering the user, best first.
+
+        Page order is the wrong order. Every site starts with furniture -
+        "Skip to main content", "Accessibility help", "Sign in" - so a naive
+        list makes "open the first link" mean something nobody intended. The
+        main content area is searched first, and boilerplate is dropped, so
+        the numbering matches what a person would actually count.
+        """
         page = self.page()
+
+        # Most specific container first; the body is only a fallback.
+        containers = [
+            "#search", "#rso",                  # Google results
+            "ytd-app #contents",                # YouTube
+            "main", "article", "[role=main]",
+            "body",
+        ]
+
+        elements = []
+        for selector in containers:
+            try:
+                found_here = page.locator(f"{selector} a:visible").all()
+            except Exception:
+                continue
+            if len(found_here) >= 3:            # a real content area
+                elements = found_here
+                break
+
+        if not elements:
+            try:
+                elements = page.locator("a:visible").all()
+            except Exception:
+                raise BrowserError(
+                    "The browser page is not available. Open a page first."
+                ) from None
+
         found: list[Link] = []
         seen: set[str] = set()
-
-        try:
-            elements = page.locator("a:visible").all()
-        except Exception:
-            raise BrowserError(
-                "The browser page is not available. Open a page first."
-            ) from None
 
         for element in elements:
             if len(found) >= limit:
@@ -282,13 +406,21 @@ class _Session:
             try:
                 text = (element.inner_text(timeout=1000) or "").strip()
                 text = re.sub(r"\s+", " ", text)
-                if not text or len(text) > 120:
+                if not text or len(text) > 120 or len(text) < 2:
                     continue
+
                 key = text.lower()
-                if key in seen:
+                if key in seen or key in BOILERPLATE:
                     continue
+
+                href = element.get_attribute("href")
+                # Anchors and javascript: handlers are rarely what "open the
+                # first link" means.
+                if not href or href.startswith(("javascript:", "#")):
+                    continue
+
                 seen.add(key)
-                found.append(Link(len(found) + 1, text, element.get_attribute("href")))
+                found.append(Link(len(found) + 1, text, href, element))
             except Exception:
                 # Elements go stale as pages re-render; skip and continue.
                 continue
@@ -330,8 +462,11 @@ class _Session:
     def _click_link(self, link: Link) -> str:
         """Click a link, coping with new tabs, overlays and navigation."""
         page = self.page()
-        locator = page.locator("a:visible").filter(has_text=re.compile(
-            re.escape(link.text), re.IGNORECASE)).first
+
+        locator = link.element
+        if locator is None:
+            locator = page.locator("a:visible").filter(has_text=re.compile(
+                re.escape(link.text), re.IGNORECASE)).first
 
         try:
             locator.scroll_into_view_if_needed(timeout=3000)
@@ -344,17 +479,33 @@ class _Session:
 
         try:
             locator.click(timeout=ACTION_TIMEOUT)
-        except PlaywrightTimeout:
-            # Usually a cookie banner or sticky header covering the element.
-            try:
-                locator.click(timeout=3000, force=True)
-            except Exception:
+        except (PlaywrightTimeout, PlaywrightError):
+            # Usually a cookie banner, a sticky header, or an element that
+            # moved as the page settled.
+            clicked = False
+            for attempt in (
+                lambda: locator.click(timeout=3000, force=True),
+                # Dispatching the event directly bypasses anything painted
+                # on top of the link.
+                lambda: locator.dispatch_event("click"),
+            ):
+                try:
+                    attempt()
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+
+            if not clicked:
+                # Last resort: the link told us where it goes, so just go
+                # there. Less faithful than a click, but the user asked to
+                # open the link, not to perform a click.
+                if link.href and link.href.startswith("http"):
+                    page.goto(link.href, wait_until="domcontentloaded")
+                    return link.text
                 raise BrowserError(
-                    f"I found '{link.text}' but could not click it. "
-                    "Something may be covering it."
+                    f"I found '{link.text}' but could not open it."
                 ) from None
-        except PlaywrightError:
-            raise BrowserError(f"I could not click '{link.text}'.") from None
 
         # Follow a popup if one appeared.
         page.wait_for_timeout(500)
@@ -592,6 +743,71 @@ def normalise_url(raw: str) -> str:
 # BrowserError with a sentence the assistant can say; executor.py turns that
 # into a failed ExecutionResult.
 
+def launch_debuggable_browser(port: int = CDP_PORT) -> str:
+    """
+    Start the user's own Chrome or Edge with remote debugging enabled.
+
+    A normal browser cannot be attached to after the fact - the debugging
+    port has to be opened at launch. A separate profile directory is used so
+    this never fights with a browser the user already has open, while still
+    being a real browser they can see and sign into.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    import os
+
+    candidates = [
+        shutil.which("chrome"),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        shutil.which("msedge"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    exe = next((c for c in candidates if c and os.path.isfile(c)), None)
+    if exe is None:
+        raise BrowserError("I could not find Chrome or Edge on this computer.")
+
+    profile = os.path.join(tempfile.gettempdir(), "nova-browser-profile")
+    try:
+        subprocess.Popen(
+            [exe, f"--remote-debugging-port={port}", f"--user-data-dir={profile}",
+             "--no-first-run", "--no-default-browser-check"],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        raise BrowserError(f"I could not start the browser: {e}") from None
+
+    # Give it a moment to open the debugging port before anyone connects.
+    import time as _time
+    _time.sleep(2.5)
+    return os.path.basename(exe)
+
+
+def browser_attach() -> str:
+    """Take control of the running debuggable browser."""
+    # Every Playwright call must happen on the worker thread - page objects
+    # are thread-affine, so reading .title() out here raises
+    # "greenlet.error: Cannot switch to a different thread".
+    def _attach_and_title():
+        page = _session.attach()
+        return page.title() or "the current page"
+
+    title = _worker.submit(_attach_and_title)
+    speak(f"Connected to your browser. I can see {title}.")
+    return title
+
+
+def browser_use_this_page() -> str:
+    """Re-read which tab is in front, then report it."""
+    def _refresh_and_title():
+        page = _session.refresh_active_page()
+        return page.title() or "this page"
+
+    return _worker.submit(_refresh_and_title)
+
+
 def browser_open(url: str) -> str:
     target = normalise_url(url)
     speak(f"Opening {target.replace('https://', '')}")
@@ -600,6 +816,7 @@ def browser_open(url: str) -> str:
 
 
 def browser_click_link(text: str) -> str:
+    _sync()
     speak(f"Looking for {text}")
     clicked = _worker.submit(lambda: _session.click_by_text(text))
     speak(f"Opened {clicked}")
@@ -607,6 +824,7 @@ def browser_click_link(text: str) -> str:
 
 
 def browser_click_index(index: int) -> str:
+    _sync()
     if index == -1:
         links = _worker.submit(lambda: _session.links())
         if not links:
@@ -654,6 +872,14 @@ def browser_scroll(direction: str) -> str:
     return direction
 
 
+def _sync():
+    """Follow the user to whichever tab they are now looking at."""
+    try:
+        _worker.submit(lambda: _session.refresh_active_page(), timeout=15)
+    except Exception:
+        pass
+
+
 def browser_list_links(limit: int = 10) -> list[Link]:
     """
     Read out numbered links so the user can pick one by number.
@@ -661,6 +887,7 @@ def browser_list_links(limit: int = 10) -> list[Link]:
     This matters more than clicking by name: speech-to-text mangles link
     text, but "number three" is unambiguous.
     """
+    _sync()
     links = _worker.submit(lambda: _session.links())
     if not links:
         raise BrowserError("I cannot find any links on this page.")
@@ -671,6 +898,7 @@ def browser_list_links(limit: int = 10) -> list[Link]:
 
 
 def browser_read_page() -> str:
+    _sync()
     text = _worker.submit(lambda: _session.read())
     speak(text[:600])
     return text

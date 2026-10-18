@@ -349,6 +349,21 @@ COMMANDS: dict[str, tuple[str, str | None]] = {
     "hit enter": ("browser_submit", None),
     "submit": ("browser_submit", None),
     "submit the form": ("browser_submit", None),
+
+    # ===================== APPS (any installed program) =====================
+
+    "open app": ("open_installed_app", None),
+    "launch": ("open_installed_app", None),
+    "start app": ("open_installed_app", None),
+
+    # ===================== BROWSER CONTROL =====================
+
+    "start browser": ("browser_launch", None),
+    "open my browser": ("browser_launch", None),
+    "use my browser": ("browser_attach", None),
+    "connect to browser": ("browser_attach", None),
+    "use this page": ("browser_attach", None),
+    "look at this page": ("browser_attach", None),
 }
 
 
