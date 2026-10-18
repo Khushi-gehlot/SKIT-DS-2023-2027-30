@@ -55,11 +55,17 @@ _ORDINAL_WORDS = (
 )
 
 # "click the second link", "open link number three", "click the last link"
+# The words people actually use. "turn on the first link" and "tap the third
+# result" mean the same thing as "click"; refusing them because the verb is
+# unusual is the kind of brittleness this system is meant to avoid.
+_CLICK_VERBS = "click|open|follow|select|go to|turn on|tap|press|choose|pick|hit"
+_CLICK_NOUNS = "link|result|one|video|item|option"
+
 _CLICK_ORDINAL = re.compile(
-    rf"\b(?:click|open|follow|select|go to)\b.*?\b(?:link|result|one)\b.*?"
+    rf"\b(?:{_CLICK_VERBS})\b.*?\b(?:{_CLICK_NOUNS})\b.*?"
     rf"\b(?P<ord>{_ORDINAL_WORDS})\b"
-    rf"|\b(?:click|open|follow|select|go to)\b.*?\b(?P<ord2>{_ORDINAL_WORDS})\b"
-    rf".*?\b(?:link|result|one)\b",
+    rf"|\b(?:{_CLICK_VERBS})\b.*?\b(?P<ord2>{_ORDINAL_WORDS})\b"
+    rf".*?\b(?:{_CLICK_NOUNS})\b",
     re.IGNORECASE,
 )
 
@@ -91,6 +97,41 @@ _TYPE_INTO = re.compile(
     r"(?P<submit>\s+and\s+(?:press\s+enter|submit|search|go))?\s*$",
     re.IGNORECASE,
 )
+
+
+# "open chrome", "launch vs code", "start whatsapp". Checked after the fixed
+# phrases so "open notepad" still uses the dedicated handler.
+_OPEN_APP = re.compile(
+    r"^(?:please\s+)?(?:open|launch|start|run)\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)"
+    r"(?:\s+(?:app|application|program|for me|please|now))?$",
+    re.IGNORECASE,
+)
+
+
+def _app_intent(cleaned: str, text: str, source: str) -> Intent | None:
+    """Match "open <anything>" against the applications actually installed."""
+    match = _OPEN_APP.match(cleaned)
+    if not match:
+        return None
+
+    name = match.group("app").strip()
+    if not name:
+        return None
+
+    try:
+        import app_launcher
+        if not app_launcher.find(name):
+            return None            # not an installed app; let other rules try
+    except Exception:
+        return None
+
+    return Intent(
+        action="open_installed_app",
+        target=None,
+        params={"app": name},
+        confidence=config.CONFIDENCE_PARTIAL,
+        raw_text=text, source=source, engine=ENGINE,
+    )
 
 
 def _browser_intent(cleaned: str, text: str, source: str) -> Intent | None:
@@ -209,6 +250,14 @@ def get_intent(text: str, source: str = "text") -> Intent:
             source=source,
             engine=ENGINE,
         )
+
+    # --- 2b. "open <any installed app>" ---
+    # After the exact dictionary, so "open notepad" keeps its dedicated
+    # handler, but before the substring scan, so "open chrome" is not
+    # swallowed by some shorter phrase that happens to appear inside it.
+    app = _app_intent(cleaned, text, source)
+    if app is not None:
+        return app
 
     # --- 3. substring match, longest phrase first ---
     for phrase in phrases():

@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Callable
 
 import actions
+import app_launcher
 import browser_actions
 from core import speak
 from intent import ExecutionResult, Intent
@@ -164,10 +165,17 @@ def _open_website(intent: Intent) -> ExecutionResult:
         actions.open_url(url)
         return ExecutionResult.ok(f"Opened {url}", intent, data=url)
 
-    fn = _WEBSITES.get(intent.target)
-    if fn is None:
+    known = {"youtube": "https://www.youtube.com", "google": "https://www.google.com"}
+    url = known.get(intent.target)
+    if url is None:
         return ExecutionResult.fail(f"Unknown website: {intent.target}", intent)
-    fn()
+
+    if _ensure_controlled_browser():
+        return _browser(
+            lambda: browser_actions.browser_open(url), intent, f"Opened {intent.target}"
+        )
+
+    _WEBSITES[intent.target]()
     return ExecutionResult.ok(f"Opened {intent.target}", intent)
 
 
@@ -177,6 +185,29 @@ def _open_settings(intent: Intent) -> ExecutionResult:
     page = "" if intent.target in (None, "home") else intent.target
     actions.open_settings_page(page)
     return ExecutionResult.ok(f"Opened settings: {intent.target}", intent)
+
+
+def _ensure_controlled_browser() -> bool:
+    """
+    Make sure a browser the assistant can see into is running.
+
+    Without this the system is split in two: `webbrowser.open` hands the page
+    to whatever browser Windows prefers, which the assistant cannot read,
+    while "click the first link" looks at a Playwright browser that is still
+    blank. Routing every web action through one controlled browser is what
+    makes "search for X" then "open the first result" work as a sequence -
+    which is the whole point for someone navigating without a mouse.
+    """
+    try:
+        if browser_actions.browser_is_running():
+            return True
+        browser_actions.launch_debuggable_browser()
+        browser_actions.browser_attach()
+        return True
+    except Exception as e:
+        print(f"Could not start a controlled browser ({type(e).__name__}: {e});"
+              " falling back to the default one.")
+        return False
 
 
 @handler("search_web")
@@ -189,6 +220,12 @@ def _search_web(intent: Intent) -> ExecutionResult:
         query = actions.ask_for_query(f"What do you want to search on {engine}?")
         if not query:
             return ExecutionResult.fail("No search term given.", intent)
+
+    if _ensure_controlled_browser():
+        return _browser(
+            lambda: browser_actions.browser_search(engine, query),
+            intent, f"Searched {engine} for {query}",
+        )
 
     actions.search_web(engine, query)
     return ExecutionResult.ok(f"Searched {engine} for {query}", intent)
@@ -234,6 +271,57 @@ def _browser(fn, intent: Intent, success: str) -> ExecutionResult:
     return ExecutionResult.ok(success.format(value=value), intent, data=value)
 
 
+@handler("open_installed_app")
+def _open_installed_app(intent: Intent) -> ExecutionResult:
+    """
+    Open any application on this PC, not just a hard-coded handful.
+
+    When several apps match closely nothing is launched - the candidates come
+    back so the user can choose, which is far better than guessing wrong for
+    someone who cannot easily close the wrong window.
+    """
+    name = intent.params.get("app") or intent.target
+    if not name:
+        name = actions.ask_for_query("Which app should I open?")
+    if not name:
+        return ExecutionResult.fail("No app named.", intent)
+
+    launched, message, candidates = app_launcher.launch(name)
+    if launched:
+        speak(message)
+        return ExecutionResult.ok(message, intent)
+
+    if candidates:
+        options = ", ".join(
+            f"{n}, {c['name']}" for n, c in enumerate(candidates, 1)
+        )
+        question = f"I found a few. Which one: {options}?"
+        speak(question)
+        return ExecutionResult.fail(question, intent, )
+
+    speak(message)
+    return ExecutionResult.fail(message, intent)
+
+
+@handler("browser_launch")
+def _browser_launch(intent: Intent) -> ExecutionResult:
+    """Start a browser the assistant is able to see into, then attach."""
+    try:
+        name = browser_actions.launch_debuggable_browser()
+        browser_actions.browser_attach()
+        return ExecutionResult.ok(f"Started {name} and connected to it.", intent)
+    except browser_actions.BrowserError as e:
+        speak(str(e))
+        return ExecutionResult.fail(str(e), intent)
+
+
+@handler("browser_attach")
+def _browser_attach(intent: Intent) -> ExecutionResult:
+    return _browser(
+        lambda: browser_actions.browser_attach(), intent, "Looking at {value}"
+    )
+
+
 @handler("browser_open")
 def _browser_open(intent: Intent) -> ExecutionResult:
     url = intent.params.get("query")
@@ -241,12 +329,14 @@ def _browser_open(intent: Intent) -> ExecutionResult:
         url = actions.ask_for_query("Which website should I open?")
     if not url:
         return ExecutionResult.fail("No website given.", intent)
+    _ensure_controlled_browser()
     return _browser(lambda: browser_actions.browser_open(url), intent, "Opened {value}")
 
 
 @handler("browser_click")
 def _browser_click(intent: Intent) -> ExecutionResult:
     """Click a link by position ("the second link") or by name."""
+    _ensure_controlled_browser()
     if intent.target == "text":
         label = intent.params.get("text")
         if not label:
@@ -312,6 +402,7 @@ def _browser_nav(intent: Intent) -> ExecutionResult:
 
 @handler("browser_scroll")
 def _browser_scroll(intent: Intent) -> ExecutionResult:
+    _ensure_controlled_browser()
     return _browser(
         lambda: browser_actions.browser_scroll(intent.target or "down"),
         intent, "Scrolled {value}",
@@ -320,6 +411,7 @@ def _browser_scroll(intent: Intent) -> ExecutionResult:
 
 @handler("browser_links")
 def _browser_links(intent: Intent) -> ExecutionResult:
+    _ensure_controlled_browser()
     return _browser(
         lambda: browser_actions.browser_list_links(), intent, "Links read out."
     )
@@ -327,6 +419,7 @@ def _browser_links(intent: Intent) -> ExecutionResult:
 
 @handler("browser_read")
 def _browser_read(intent: Intent) -> ExecutionResult:
+    _ensure_controlled_browser()
     return _browser(lambda: browser_actions.browser_read_page(), intent, "Page read.")
 
 
