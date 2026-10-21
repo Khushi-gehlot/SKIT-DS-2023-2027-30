@@ -252,3 +252,15 @@ REQUIRE_SPEAKER_VERIFICATION = False
 
 # Cosine similarity above which a voice is accepted as the enrolled speaker.
 SPEAKER_SIMILARITY_THRESHOLD = 0.75
+
+
+# =============== HUD ===============
+#
+# Location for the weather panel. Open-Meteo needs no API key, only
+# coordinates. Override in .env if the assistant is used elsewhere.
+WEATHER_LAT = float(os.environ.get("VYAS_LAT", "26.9124"))
+WEATHER_LON = float(os.environ.get("VYAS_LON", "75.7873"))
+WEATHER_CITY = os.environ.get("VYAS_CITY", "Jaipur")
+
+# Shown in the header bar.
+USER_NAME = os.environ.get("VYAS_USER_NAME", "Khushi")
