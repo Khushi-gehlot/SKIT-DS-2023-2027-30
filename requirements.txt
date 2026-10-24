@@ -19,3 +19,4 @@ webrtcvad-wheels
 torch
 librosa
 scikit-learn
+pymongo

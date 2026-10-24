@@ -319,6 +319,35 @@ ENROLMENT_PHRASES = [
 ]
 
 
+# =============== VOICEPRINT STORAGE ===============
+#
+# "mongodb" keeps voiceprints in a database; "json" keeps them in a file
+# beside the code. MongoDB is the default, and the store falls back to the
+# file by itself when no database is reachable - so the assistant still
+# works on a machine where MongoDB was never installed.
+
+VOICEPRINT_BACKEND = os.environ.get("VYAS_VOICEPRINT_BACKEND", "mongodb").lower()
+
+# A local server by default. Deliberately local rather than hosted: a
+# voiceprint is biometric data, and keeping it on the user's own machine is
+# a far easier promise to keep than keeping it on someone else's.
+#
+# An Atlas cluster works unchanged - put the full SRV string in .env as
+#     MONGO_URI=mongodb+srv://user:password@cluster.mongodb.net/
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+MONGO_DB = os.environ.get("MONGO_DB", "vyasa")
+MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "voiceprints")
+
+# pymongo connects lazily and waits 30 seconds by default before admitting a
+# server is down. That is an unacceptable pause in front of a microphone, so
+# give up quickly and fall back to the file.
+MONGO_TIMEOUT_MS = int(os.environ.get("VYAS_MONGO_TIMEOUT_MS", "2000"))
+
+# Used when MongoDB is unavailable. Beside the code, never in the repo -
+# see .gitignore.
+VOICEPRINT_FILE = Path(__file__).parent / "voiceprints.json"
+
+
 # =============== HUD ===============
 #
 # Location for the weather panel. Open-Meteo needs no API key, only

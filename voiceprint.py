@@ -7,8 +7,9 @@ said. Two recordings of the same person land close together in that space;
 two different people do not. Closeness is measured with cosine similarity.
 
 This module is deliberately storage-agnostic: it produces and compares
-embeddings and knows nothing about where they live. A JSON file is used by
-default, and the same `save`/`load` seam is where MongoDB will plug in.
+embeddings and knows nothing about where they live. Persistence is handled
+by voiceprint_store, which keeps them in MongoDB and falls back to a local
+file when no database is reachable.
 
     enrol_from_audio([a, b, c])  -> averaged voiceprint
     verify(audio, voiceprint)    -> (is_match, similarity)
@@ -16,13 +17,10 @@ default, and the same `save`/`load` seam is where MongoDB will plug in.
 
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
-
 import numpy as np
 
 import config
+import voiceprint_store
 
 try:
     from resemblyzer import VoiceEncoder, preprocess_wav
@@ -31,10 +29,6 @@ except ImportError:
     VoiceEncoder = preprocess_wav = None
     RESEMBLYZER_AVAILABLE = False
 
-
-# Where voiceprints live until MongoDB takes over. Beside the code, not in
-# the repo - a voiceprint is biometric data and must never be committed.
-STORE = Path(__file__).parent / "voiceprints.json"
 
 # Loading the model takes a few seconds, so do it once, lazily: the app must
 # start instantly even if nobody ever enrols.
@@ -138,49 +132,28 @@ def verify(audio, voiceprint: np.ndarray) -> tuple[bool, float]:
 
 # =============== STORAGE ===============
 #
-# A JSON file for now. Keshav's MongoDB work replaces the two functions
-# below and nothing else - that is why they are the only place that knows
-# how a voiceprint is persisted.
+# Delegated to voiceprint_store, which decides between MongoDB and a local
+# file. These four functions are the whole persistence surface: everything
+# else in the system goes through them, so swapping the database needed no
+# change to enrolment, verification or the UI.
 
-def save(voiceprint: np.ndarray, speaker: str = "default") -> bool:
-    try:
-        data = _read_all()
-        data[speaker] = voiceprint.tolist()
-        STORE.write_text(json.dumps(data), encoding="utf-8")
-        return True
-    except Exception as e:
-        print(f"Could not save the voiceprint: {type(e).__name__}: {e}")
-        return False
+def save(voiceprint: np.ndarray, speaker: str = "default", samples: int = 0) -> bool:
+    return voiceprint_store.get_store().save(voiceprint, speaker, samples)
 
 
 def load(speaker: str = "default") -> np.ndarray | None:
-    data = _read_all()
-    stored = data.get(speaker)
-    return np.array(stored, dtype=np.float32) if stored else None
+    return voiceprint_store.get_store().load(speaker)
 
 
 def delete(speaker: str = "default") -> bool:
-    data = _read_all()
-    if speaker not in data:
-        return False
-    del data[speaker]
-    try:
-        STORE.write_text(json.dumps(data), encoding="utf-8")
-        return True
-    except Exception:
-        return False
+    return voiceprint_store.get_store().delete(speaker)
 
 
 def enrolled_speakers() -> list[str]:
-    return sorted(_read_all())
+    return voiceprint_store.get_store().speakers()
 
 
-def _read_all() -> dict:
-    if not STORE.is_file():
-        return {}
-    try:
-        return json.loads(STORE.read_text(encoding="utf-8"))
-    except Exception:
-        # A corrupt store should not stop the assistant working; it just
-        # means nobody is enrolled.
-        return {}
+def storage_status() -> dict:
+    """Which backend is in use and where the data sits. Shown in the UI so
+    the user can see where their biometric data is being kept."""
+    return voiceprint_store.status()

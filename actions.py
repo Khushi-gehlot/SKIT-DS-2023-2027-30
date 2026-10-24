@@ -613,17 +613,30 @@ def forget_voice():
 
 
 def voice_status():
-    """Say whether anyone is enrolled."""
+    """Say whether anyone is enrolled, and where their voiceprint is kept."""
     import auth
     import config
     if not auth.is_available():
         speak("Speaker verification is not installed.")
         return
+
+    storage = auth.storage_status()
+    # Printed rather than spoken: the user wants to hear whether they are
+    # enrolled, not a database connection string read out loud.
+    print(f"Voiceprint storage: {storage['location']}")
+    if storage["fallback_reason"]:
+        print(f"  (MongoDB was unavailable: {storage['fallback_reason']})")
+
     if not auth.is_enrolled():
         speak("No voice is enrolled yet. Say 'enrol my voice' to set it up.")
         return
+
     state = "on" if config.REQUIRE_SPEAKER_VERIFICATION else "off"
-    speak(f"Your voice is enrolled, and verification is currently {state}.")
+    where = "a database" if storage["backend"] == "mongodb" else "a local file"
+    speak(
+        f"Your voice is enrolled and stored in {where}, "
+        f"and verification is currently {state}."
+    )
 
 
 def check_voice():

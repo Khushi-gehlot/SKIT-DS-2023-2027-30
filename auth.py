@@ -39,6 +39,11 @@ def enrolled_speakers() -> list[str]:
     return voiceprint.enrolled_speakers()
 
 
+def storage_status() -> dict:
+    """Which store holds the voiceprints, and who is in it."""
+    return voiceprint.storage_status()
+
+
 def enroll(audio_samples: list[Any], speaker: str = "default") -> AuthResult:
     """
     Record a voiceprint from several samples.
@@ -64,13 +69,15 @@ def enroll(audio_samples: list[Any], speaker: str = "default") -> AuthResult:
                     "Try again, a little closer to the microphone.",
         )
 
-    if not voiceprint.save(embedding, speaker):
+    if not voiceprint.save(embedding, speaker, samples=len(audio_samples)):
         return AuthResult(allowed=False, message="I could not save the voiceprint.")
 
+    where = voiceprint.storage_status()["location"]
     return AuthResult(
         allowed=True,
         speaker=speaker,
-        message=f"Voice enrolled for {speaker}. Sensitive commands will now be checked.",
+        message=f"Voice enrolled for {speaker}, stored in {where}. "
+                f"Sensitive commands will now be checked.",
     )
 
 
