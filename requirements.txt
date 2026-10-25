@@ -14,3 +14,8 @@ PyAudio
 streamlit
 playwright
 faster-whisper
+resemblyzer
+webrtcvad-wheels
+torch
+librosa
+scikit-learn

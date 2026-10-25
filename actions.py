@@ -568,3 +568,95 @@ def send_email_voice():
     except Exception as e:
         print("Email error:", e)
         speak("Sorry, I could not send the email.")
+
+# =============== SPEAKER ENROLMENT ===============
+
+def enrol_voice():
+    """
+    Walk the user through recording a voiceprint.
+
+    Several short phrases rather than one long one: averaging across
+    separate recordings captures the voice on more than one breath, so
+    verification still works when the user is tired or sitting further away.
+    """
+    import auth
+    import config
+    import core
+
+    if not auth.is_available():
+        speak("Speaker verification is not installed on this computer.")
+        return
+
+    speak(
+        f"I will learn your voice. Please repeat {config.ENROLMENT_SAMPLES} "
+        "short phrases after me."
+    )
+
+    samples = []
+    for number, phrase in enumerate(config.ENROLMENT_PHRASES[:config.ENROLMENT_SAMPLES], 1):
+        speak(f"Phrase {number}. {phrase}")
+        _text, audio = core.listen(timeout=8, phrase_time_limit=6)
+        if audio is None:
+            speak("I did not hear that one. Let us carry on.")
+            continue
+        samples.append(audio)
+
+    result = auth.enroll(samples)
+    speak(result.message)
+    return result.allowed
+
+
+def forget_voice():
+    """Delete the stored voiceprint."""
+    import auth
+    speak(auth.unenroll().message)
+
+
+def voice_status():
+    """Say whether anyone is enrolled."""
+    import auth
+    import config
+    if not auth.is_available():
+        speak("Speaker verification is not installed.")
+        return
+    if not auth.is_enrolled():
+        speak("No voice is enrolled yet. Say 'enrol my voice' to set it up.")
+        return
+    state = "on" if config.REQUIRE_SPEAKER_VERIFICATION else "off"
+    speak(f"Your voice is enrolled, and verification is currently {state}.")
+
+
+def check_voice():
+    """
+    Record one phrase and report how closely it matches the enrolled voice.
+
+    A diagnostic, not a gate: it runs whether or not verification is switched
+    on, which makes it the way to see real match scores and pick a sensible
+    threshold. Guessing a threshold without ever seeing your own numbers is
+    how these systems end up either trivially bypassed or unusable.
+    """
+    import auth
+    import config
+    import core
+
+    if not auth.is_available():
+        speak("Speaker verification is not installed.")
+        return
+    if not auth.is_enrolled():
+        speak("No voice is enrolled yet. Say 'enrol my voice' first.")
+        return
+
+    speak("Say anything, and I will tell you how well it matches.")
+    _text, audio = core.listen(timeout=8, phrase_time_limit=6)
+    if audio is None:
+        speak("I did not hear anything.")
+        return
+
+    result = auth.verify_audio(audio)
+    score = result.similarity or 0.0
+    threshold = config.SPEAKER_SIMILARITY_THRESHOLD
+    verdict = "a match" if result.allowed else "not a match"
+
+    speak(f"That scored {score:.0%}. Threshold is {threshold:.0%}, so that is {verdict}.")
+    print(f"  similarity {score:.3f}  threshold {threshold:.3f}  -> {verdict}")
+    return score

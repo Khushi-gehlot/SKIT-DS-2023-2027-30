@@ -28,3 +28,6 @@ __pycache__/
 .env
 venv/
 screenshot.png
+
+# Biometric data - voiceprints must never be committed
+voiceprints.json

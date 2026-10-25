@@ -433,6 +433,38 @@ def _browser_close(intent: Intent) -> ExecutionResult:
     return _browser(lambda: browser_actions.browser_close(), intent, "Browser {value}.")
 
 
+# =============== SPEAKER VERIFICATION ===============
+
+@handler("enrol_voice")
+def _enrol_voice(intent: Intent) -> ExecutionResult:
+    ok = actions.enrol_voice()
+    return (
+        ExecutionResult.ok("Voice enrolled.", intent)
+        if ok else ExecutionResult.fail("Enrolment did not complete.", intent)
+    )
+
+
+@handler("forget_voice")
+def _forget_voice(intent: Intent) -> ExecutionResult:
+    actions.forget_voice()
+    return ExecutionResult.ok("Voiceprint removed.", intent)
+
+
+@handler("check_voice")
+def _check_voice(intent: Intent) -> ExecutionResult:
+    score = actions.check_voice()
+    return ExecutionResult.ok(
+        f"Voice match: {score:.0%}" if score is not None else "Could not check.",
+        intent, data=score,
+    )
+
+
+@handler("voice_status")
+def _voice_status(intent: Intent) -> ExecutionResult:
+    actions.voice_status()
+    return ExecutionResult.ok("Reported voice status.", intent)
+
+
 # =============== ENTRY POINT ===============
 
 def execute(intent: Intent) -> ExecutionResult:

@@ -248,10 +248,37 @@ LLM_MIN_CONFIDENCE = 0.5
 
 # Speaker verification is not implemented yet; until it is, everything is
 # allowed through. Set to True once enrolment exists.
-REQUIRE_SPEAKER_VERIFICATION = False
+REQUIRE_SPEAKER_VERIFICATION = True
 
 # Cosine similarity above which a voice is accepted as the enrolled speaker.
-SPEAKER_SIMILARITY_THRESHOLD = 0.75
+#
+# 0.75 is a deliberate middle: Resemblyzer typically scores the same speaker
+# around 0.80-0.95 and different speakers around 0.50-0.70. Raise it to make
+# impersonation harder at the cost of rejecting the real user more often;
+# lower it to be more forgiving. For an accessibility tool a false rejection
+# is an inconvenience, while a false acceptance could mean a stranger
+# shutting the machine down - so err high rather than low.
+SPEAKER_SIMILARITY_THRESHOLD = float(
+    os.environ.get("VYAS_SPEAKER_THRESHOLD", "0.75")
+)
+
+# Recordings shorter than this carry too little voice to identify anyone.
+MIN_VOICE_SECONDS = 1.2
+
+# How many phrases enrolment collects. Averaging several captures the user
+# on more than one breath, so verification still works when they are tired
+# or sitting further from the microphone.
+ENROLMENT_SAMPLES = 4
+
+# What the user is asked to say while enrolling. Varied on purpose: phrases
+# with different sounds give the encoder more to work with than one repeated
+# sentence.
+ENROLMENT_PHRASES = [
+    "Nova, this is my voice.",
+    "Open my downloads folder.",
+    "The quick brown fox jumps over the lazy dog.",
+    "Lock the computer when I am away.",
+]
 
 
 # =============== HUD ===============
