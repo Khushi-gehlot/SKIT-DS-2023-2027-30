@@ -93,6 +93,11 @@ _MODEL_FIELDS = {"action", "target", "params", "confidence"}
 _VALID_ACTIONS = set(ACTIONS)
 
 
+def extract_json(text: str) -> dict | None:
+    """Public alias - the link resolver parses replies the same way."""
+    return _extract_json(text)
+
+
 def _extract_json(text: str) -> dict | None:
     """
     Pull a JSON object out of a model response.
@@ -121,12 +126,22 @@ def _extract_json(text: str) -> dict | None:
 
 
 def _call_llm(text: str, json_mode: bool = True) -> str | None:
+    """Classify one utterance as an intent. Returns the raw reply, or None."""
+    return ask(system_prompt(), text, json_mode=json_mode)
+
+
+def ask(system: str, user: str, json_mode: bool = True,
+        max_tokens: int | None = None) -> str | None:
     """
-    Send one classification request. Returns the raw reply, or None.
+    Send one request to whichever provider is configured.
+
+    Separated from intent classification so other features can reuse the
+    provider table, the fallback chain and the error handling rather than
+    duplicating all of it. The link resolver is the first such caller.
 
     json_mode asks the provider to guarantee valid JSON. It is worth having,
     but providers reject some prompts outright with "Failed to generate JSON"
-    - so a 400 retries once without it. The response is parsed leniently
+    - so a 400 retries once without it. Responses are parsed leniently
     anyway, which makes the guarantee a convenience rather than a
     requirement.
     """
@@ -138,11 +153,11 @@ def _call_llm(text: str, json_mode: bool = True) -> str | None:
     body = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt()},
-            {"role": "user", "content": text},
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
         ],
         "temperature": config.LLM_TEMPERATURE,
-        "max_tokens": config.LLM_MAX_TOKENS,
+        "max_tokens": max_tokens or config.LLM_MAX_TOKENS,
     }
     if json_mode:
         body["response_format"] = {"type": "json_object"}
@@ -181,7 +196,7 @@ def _call_llm(text: str, json_mode: bool = True) -> str | None:
         # Some prompts make strict JSON mode fail. Ask again without it and
         # lean on the lenient parser instead of losing the answer.
         print(f"{name} rejected JSON mode; retrying without it.")
-        return _call_llm(text, json_mode=False)
+        return ask(system, user, json_mode=False, max_tokens=max_tokens)
 
     if not response.ok:
         print(

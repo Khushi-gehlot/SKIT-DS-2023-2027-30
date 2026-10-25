@@ -162,6 +162,11 @@ NO_WORDS = [
 # How long to wait for a yes/no before giving up on the question.
 CONFIRM_TIMEOUT = 6
 
+# Start listening for the wake word as soon as the app opens, so the first
+# thing a user can do is speak. For someone who cannot comfortably reach a
+# mouse, needing to click a button before they can talk defeats the point.
+AUTO_START_LISTENING = True
+
 # Consecutive silences before a button-started session gives up. The page is
 # blocked while it runs, so it cannot listen indefinitely.
 SESSION_SILENCE_LIMIT = 3
@@ -242,6 +247,12 @@ LLM_MAX_TOKENS = 200
 
 # Below this the LLM's answer is discarded in favour of the keyword matcher.
 LLM_MIN_CONFIDENCE = 0.5
+
+# Below this the link resolver's answer is discarded and word matching is
+# used instead. Set higher than the intent threshold on purpose: a wrong
+# intent usually just opens the wrong window, while a wrong link navigates
+# away from whatever the user was reading.
+LINK_MIN_CONFIDENCE = 0.6
 
 
 # =============== AUTHENTICATION ===============
