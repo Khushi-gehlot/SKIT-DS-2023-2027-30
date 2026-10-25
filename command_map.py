@@ -364,6 +364,30 @@ COMMANDS: dict[str, tuple[str, str | None]] = {
     "connect to browser": ("browser_attach", None),
     "use this page": ("browser_attach", None),
     "look at this page": ("browser_attach", None),
+
+    # ===================== SPEAKER VERIFICATION =====================
+
+    "enrol my voice": ("enrol_voice", None),
+    "enroll my voice": ("enrol_voice", None),
+    "learn my voice": ("enrol_voice", None),
+    "register my voice": ("enrol_voice", None),
+    "set up voice recognition": ("enrol_voice", None),
+
+    "forget my voice": ("forget_voice", None),
+    "delete my voiceprint": ("forget_voice", None),
+
+    "voice status": ("voice_status", None),
+    "am i enrolled": ("voice_status", None),
+
+    "check my voice": ("check_voice", None),
+    "test my voice": ("check_voice", None),
+    "verify my voice": ("check_voice", None),
+    "is that me": ("check_voice", None),
+    "do you recognise me": ("check_voice", None),
+    "do you recognize me": ("check_voice", None),
+
+    "show me voice status": ("voice_status", None),
+    "my voice status": ("voice_status", None),
 }
 
 

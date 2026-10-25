@@ -537,6 +537,10 @@ with right:
     st.markdown('<div class="hud-h2">QUICK COMMANDS</div>', unsafe_allow_html=True)
 
     GROUPS: dict[str, list[str]] = {
+        # Voice first: these are the hardest to remember and the ones that
+        # need running in a particular order to set the feature up at all.
+        "VOICE ID": ["enrol my voice", "check my voice", "voice status",
+                     "forget my voice"],
         "APPS": ["open chrome", "open notepad", "open calculator", "open whatsapp"],
         "WEB": ["open youtube", "search google for news", "list links", "go back"],
         "SYSTEM": ["battery", "take screenshot", "volume up", "volume down"],
