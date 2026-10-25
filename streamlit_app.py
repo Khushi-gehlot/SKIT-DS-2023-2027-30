@@ -379,6 +379,23 @@ for key, default in (
         st.session_state[key] = default
 
 controller = get_controller()
+
+# Option 1: start listening the moment the app opens, so "hi nova" works
+# without touching anything.
+#
+# `started_once` is per browser session and `stopped_by_user` records an
+# explicit STOP, so a rerun never resurrects a listener the user deliberately
+# switched off. controller.start() is itself a no-op while the thread is
+# alive, which makes this safe to reach on every rerun.
+if "stopped_by_user" not in st.session_state:
+    st.session_state.stopped_by_user = False
+
+if (
+    config.AUTO_START_LISTENING
+    and not st.session_state.stopped_by_user
+    and not controller.is_running()
+):
+    controller.start()
 for ev in reversed(controller.drain()):
     st.session_state.history.insert(0, ev)
 
@@ -419,12 +436,14 @@ left, centre, right = st.columns([3, 6, 3], gap="large")
 # ---------- LEFT ----------
 with left:
     st.markdown('<div class="hud-h2">CONTROLS</div>', unsafe_allow_html=True)
-    st.caption("Background listening")
+    st.caption("Option 3 — background listening")
     on_col, off_col = st.columns(2)
     if on_col.button("START", use_container_width=True, disabled=always_on):
+        st.session_state.stopped_by_user = False
         st.session_state.status = controller.start()
         st.rerun()
     if off_col.button("STOP", use_container_width=True, disabled=not always_on):
+        st.session_state.stopped_by_user = True
         st.session_state.status = controller.stop()
         st.rerun()
 
@@ -484,7 +503,14 @@ with centre:
     )
     st.markdown(f'<div class="wave">{bars}</div>', unsafe_allow_html=True)
 
-    if st.button("◉  TAP AND SPEAK", type="primary", use_container_width=True):
+    st.markdown(
+        "<div style=\"text-align:center;font-family:'Share Tech Mono',monospace;"
+        "font-size:.78rem;letter-spacing:.16em;color:#7FEAFF;margin:.2rem 0 .9rem\">"
+        "OPTION 1 &nbsp;·&nbsp; JUST SAY &nbsp;&quot;HI NOVA&quot;</div>",
+        unsafe_allow_html=True,
+    )
+
+    if st.button("◉  OPTION 2 — TAP AND SPEAK", type="primary", use_container_width=True):
         with st.spinner("Listening… speak now. Say “sleep” when you're done."):
             ok, heard, msg = listen_once()
         st.session_state.last_heard = heard

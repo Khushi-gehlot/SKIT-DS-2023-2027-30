@@ -443,11 +443,34 @@ class _Session:
         if not candidates:
             raise BrowserError("I cannot find any links on this page.")
 
+        # 1. Word matching first. It is instant and free, and an exact or
+        #    near-exact label is the common case - no point paying a network
+        #    round trip to be told what we already know.
         best = _best_match(wanted_clean, candidates)
-        if best is None:
-            raise BrowserError(f"I could not find a link called {wanted}.")
+        if best is not None:
+            return self._click_link(best)
 
-        return self._click_link(best)
+        # 2. Nothing matched on words. This is where a person still knows
+        #    what they meant - "go to contacts" against a link called
+        #    "Reach Us" - so ask the model to read the page's own links and
+        #    pick one.
+        try:
+            from nlu import link_resolver
+
+            index, confidence = link_resolver.resolve(wanted, candidates)
+            if index is not None:
+                chosen = next(
+                    (link for link in candidates if link.index == index), None
+                )
+                if chosen is not None:
+                    print(f"Link resolver chose '{chosen.text}' ({confidence:.0%}).")
+                    return self._click_link(chosen)
+        except Exception as e:
+            # The resolver is an enhancement; a failure in it must not stop
+            # the browser working.
+            print(f"Link resolver unavailable ({type(e).__name__}).")
+
+        raise BrowserError(f"I could not find a link called {wanted}.")
 
     def click_by_index(self, index: int) -> str:
         candidates = self.links()
