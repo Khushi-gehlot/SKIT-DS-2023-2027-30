@@ -35,7 +35,11 @@ MIC_INDEX: int | None = int(_mic) if _mic and _mic.isdigit() else None
 
 LISTEN_TIMEOUT = 8          # seconds to wait for speech to start
 PHRASE_TIME_LIMIT = 8       # maximum length of a single utterance
-PAUSE_THRESHOLD = 1.2       # silence that marks the end of a phrase
+PAUSE_THRESHOLD = 1.2
+# Audio kept from before the trigger fires. Speech ramps up, so without a
+# generous pre-roll the opening syllable is lost. Must stay below
+# PAUSE_THRESHOLD.
+PRE_SPEECH_BUFFER = 0.9       # silence that marks the end of a phrase
 # 0.8 was too eager: a natural beat between "hello" and the name ended the
 # utterance, so the recogniser only ever heard "hello".
 CALIBRATION_SECONDS = 1.0   # ambient-noise sampling on first listen
@@ -107,11 +111,15 @@ GREETINGS = ["hello", "hey", "hi", "ok", "okay", "yo"]
 
 NAME_VARIANTS = [
     # the name and its spelling variants
-    "nova", "novah", "nova.",
-    # near-misses recognisers produce for it
-    "nover", "nowa", "noba", "nava", "no va", "nova,", "nobo", "knowva",
+    "nova", "novah", "nowva", "noval",
+    # what recognisers actually returned in testing. These are not guesses:
+    # "nova" came back as "nover" and "nowa", and "okay nova" merged into
+    # "okinawa". Google hears the sounds correctly and picks the wrong words,
+    # so the variants have to cover its choices rather than our spelling.
+    "nover", "nowa", "noba", "nava", "nobo", "knowva", "novo", "nouveau",
+    "okinawa", "kinawa", "innova", "nirvana",
     # kept so the earlier wake words still work for anyone used to them
-    "coco", "cocoa", "vyas", "vias", "guys", "bhai",
+    "coco", "cocoa", "vyas", "vias", "bhai",
 ]
 
 WAKE_WORDS = [f"{g} {n}" for g in GREETINGS for n in NAME_VARIANTS]
@@ -174,6 +182,25 @@ SESSION_SILENCE_LIMIT = 3
 # How close a short utterance must be to the name to count as the wake word.
 # 1.0 is exact; lower accepts more mishearings but risks waking on nothing.
 WAKE_FUZZY_CUTOFF = 0.7
+
+# How many words from the start of an utterance are checked for the name.
+# People say it first - "nova, open notepad" - so looking only at the
+# opening catches a mangled name without letting a chance resemblance
+# later in a sentence wake the assistant.
+WAKE_SEARCH_WORDS = 3
+
+# "nova" is frequently transcribed as "google". The word therefore has to be
+# accepted as the name - but only when the surrounding words show it is not
+# being used as the search engine, or every "search google for X" would wake
+# the assistant.
+GOOGLE_AS_ENGINE_BEFORE = {
+    "search", "open", "on", "in", "to", "via", "using", "ask", "from",
+    "launch", "start", "goto", "visit",
+}
+GOOGLE_AS_ENGINE_AFTER = {
+    "search", "for", "dot", "com", "maps", "images", "drive", "docs",
+    "translate", "photos", "news", "calendar", "meet", "chrome",
+}
 
 # Pause after the assistant finishes speaking before opening the microphone.
 # Without it the tail of its own voice bleeds into the recording and the
