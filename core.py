@@ -85,18 +85,79 @@ def is_wake_word(text: str | None) -> bool:
     if any(w in lowered for w in config.WAKE_WORDS):
         return True
 
-    # Fuzzy pass, short utterances only. Applying this to a long sentence
-    # would make almost anything wake the assistant.
     words = re.sub(r"[^a-z0-9 ]", "", lowered).split()
-    if not words or len(words) > 2:
+    if not words:
         return False
 
-    candidate = words[-1]           # "hey nova" -> "nova"
-    return bool(
-        difflib.get_close_matches(
-            candidate, config.NAME_VARIANTS, n=1, cutoff=config.WAKE_FUZZY_CUTOFF
-        )
-    )
+    # Fuzzy match, but only against the *opening* of the utterance.
+    #
+    # People put the name first - "nova, open notepad" - so checking the
+    # first few words catches a mangled name without letting a chance
+    # resemblance halfway through a sentence wake the assistant.
+    #
+    # This matters because the recogniser mangles the name constantly:
+    # observed in testing, "nova" came back as "Google" and "I know", and
+    # "okay nova" became "okinawa". The audio was right; the transcription
+    # was not. Matching only the literal spelling meant the wake word
+    # almost never fired.
+    opening = words[: config.WAKE_SEARCH_WORDS]
+
+    for word in opening:
+        if len(word) < 3:
+            continue
+        if difflib.get_close_matches(
+            word, config.NAME_VARIANTS, n=1, cutoff=config.WAKE_FUZZY_CUTOFF
+        ):
+            return True
+
+    # Two adjacent words can also collapse into one transcription, or split
+    # one spoken word in two: "okay nova" -> "okinawa", "nova" -> "no va".
+    joined = "".join(opening)
+    if difflib.get_close_matches(
+        joined, config.NAME_VARIANTS, n=1, cutoff=config.WAKE_FUZZY_CUTOFF
+    ):
+        return True
+
+    for first, second in zip(opening, opening[1:]):
+        if difflib.get_close_matches(
+            first + second, config.NAME_VARIANTS, n=1,
+            cutoff=config.WAKE_FUZZY_CUTOFF,
+        ):
+            return True
+
+    return _heard_as_google(words)
+
+
+def _heard_as_google(words: list[str]) -> bool:
+    """
+    The recogniser renders "nova" as "google" remarkably often.
+
+    This cannot be handled by adding "google" to NAME_VARIANTS, because the
+    user also says it for real - "search google for news" must not wake the
+    assistant. So the word only counts as the name when its neighbours show
+    it is *not* being used as the search engine: "search google", "open
+    google", "google for", "google dot com" are all the real thing, while
+    "hi google, open notepad" is a mangled wake word.
+    """
+    # "google" on its own is the command to open Google, not a mangled name.
+    # A wake word is always followed by something to do.
+    if len(words) < 2:
+        return False
+
+    for position, word in enumerate(words[: config.WAKE_SEARCH_WORDS]):
+        if word not in ("google", "googled", "googl"):
+            continue
+
+        before = words[position - 1] if position > 0 else ""
+        after = words[position + 1] if position + 1 < len(words) else ""
+
+        if before in config.GOOGLE_AS_ENGINE_BEFORE:
+            continue
+        if after in config.GOOGLE_AS_ENGINE_AFTER:
+            continue
+
+        return True
+    return False
 
 
 def strip_wake_word(text: str) -> str:
@@ -186,6 +247,20 @@ _recognizer = sr.Recognizer()
 # handled by recalibrating periodically instead.
 _recognizer.dynamic_energy_threshold = False
 _recognizer.pause_threshold = config.PAUSE_THRESHOLD
+# How much audio from *before* the trigger is kept. The default 0.5s was
+# clipping the first word: speech ramps up, so by the time energy crosses the
+# threshold the opening syllable has already happened. Must stay below
+# pause_threshold or SpeechRecognition will never end a phrase.
+_recognizer.non_speaking_duration = config.PRE_SPEECH_BUFFER
+
+# The microphone, held open between listens.
+#
+# Opening a PyAudio stream takes 100-300ms, and nothing is captured during
+# that window. Reopening it for every utterance meant the start of each one
+# fell into the gap - which is exactly why short wake words like "hi nova"
+# kept coming back as nothing, or as the command without the name.
+_source = None
+_source_lock = threading.Lock()
 _calibrated = False
 _listens_since_calibration = 0
 
@@ -196,12 +271,40 @@ def list_microphones():
         print(f"  [{i}] {name}")
 
 
+def _get_source():
+    """
+    The shared open microphone, opening it on first use.
+
+    Held open for the life of the process so no audio is lost between
+    listens. release_mic() closes it when another application needs it.
+    """
+    global _source
+    with _source_lock:
+        if _source is None:
+            mic = sr.Microphone(device_index=config.MIC_INDEX)
+            _source = (mic, mic.__enter__())
+        return _source[1]
+
+
+def release_mic():
+    """Close the microphone so other software can use it."""
+    global _source, _calibrated
+    with _source_lock:
+        if _source is not None:
+            try:
+                _source[0].__exit__(None, None, None)
+            except Exception:
+                pass
+            _source = None
+            _calibrated = False
+
+
 def calibrate(duration: float = config.CALIBRATION_SECONDS):
     """Learn the room's noise floor. Called automatically on first listen."""
     global _calibrated, _listens_since_calibration
     try:
-        with sr.Microphone(device_index=config.MIC_INDEX) as source:
-            _recognizer.adjust_for_ambient_noise(source, duration=duration)
+        source = _get_source()
+        _recognizer.adjust_for_ambient_noise(source, duration=duration)
         # A silent or dead device calibrates to ~0, which would make the
         # recogniser trigger on nothing at all. Keep a sane floor.
         if _recognizer.energy_threshold < config.MIN_ENERGY_THRESHOLD:
@@ -249,11 +352,11 @@ def listen(
     _listens_since_calibration += 1
 
     try:
-        with sr.Microphone(device_index=config.MIC_INDEX) as source:
-            print(f"Listening... (threshold {_recognizer.energy_threshold:.0f})")
-            audio = _recognizer.listen(
-                source, timeout=timeout, phrase_time_limit=phrase_time_limit
-            )
+        source = _get_source()
+        print(f"Listening... (threshold {_recognizer.energy_threshold:.0f})")
+        audio = _recognizer.listen(
+            source, timeout=timeout, phrase_time_limit=phrase_time_limit
+        )
     except sr.WaitTimeoutError:
         # Nobody spoke in time. Normal, not an error.
         print("No speech detected (timeout).")
