@@ -22,6 +22,7 @@ import config
 
 import pipeline
 import core
+import wakeword
 from core import is_sleep_word, is_wake_word, speak, transcribe
 from command_map import COMMANDS
 
@@ -86,29 +87,14 @@ class AlwaysOnController:
         """Wait for a wake word, then take commands until a sleep word."""
         try:
             while not self._stop.is_set():
-                text = transcribe()
-                if self._stop.is_set():
-                    break
-                if not text:
-                    continue
-
-                if not is_wake_word(text):
-                    self.log(text, "Ignored — no wake word.", False)
-                    continue
-
-                # "nova open notepad" said as one breath: run it straight
-                # away. Saying both together is also markedly more reliable,
-                # since the engine gets a full phrase instead of one short
-                # word to work with.
-                trailing = core.strip_wake_word(text)
-                if trailing:
-                    self.log(text, "Wake word + command.", True)
-                    ok, message = speak_and_run(trailing, source="voice")
-                    self.log(trailing, message, ok)
-                    continue
+                if wakeword.is_available():
+                    if not self._wait_for_model_wake():
+                        continue
+                else:
+                    if not self._wait_for_transcribed_wake():
+                        continue
 
                 speak(core.greeting())
-                self.log(text, "Wake word detected.", True)
 
                 while not self._stop.is_set():
                     cmd = transcribe()
@@ -126,6 +112,48 @@ class AlwaysOnController:
             self.log("(loop crashed)", str(e), False)
         finally:
             self._stop.set()
+
+    def _wait_for_model_wake(self) -> bool:
+        """
+        Block on the wake-word model until the phrase is heard.
+
+        Nothing is transcribed and no audio leaves the machine while this
+        waits - the speech service is only reached for the command that
+        follows. True when the phrase fired, False when the loop was asked
+        to stop.
+        """
+        heard = core.wait_for_wake_word(should_stop=self._stop.is_set)
+        if not heard:
+            return False
+        self.log(f'"{config.WAKE_PHRASE}"', "Wake word detected.", True)
+        return True
+
+    def _wait_for_transcribed_wake(self) -> bool:
+        """
+        The original route: transcribe everything, look for the name in the
+        text. Kept for machines without openWakeWord, and because it is the
+        comparison the report is built on.
+        """
+        text = transcribe()
+        if self._stop.is_set() or not text:
+            return False
+
+        if not is_wake_word(text):
+            self.log(text, "Ignored — no wake word.", False)
+            return False
+
+        # "nova open notepad" said as one breath: run it straight away.
+        # Saying both together is also markedly more reliable here, since
+        # the engine gets a full phrase instead of one short word.
+        trailing = core.strip_wake_word(text)
+        if trailing:
+            self.log(text, "Wake word + command.", True)
+            ok, message = speak_and_run(trailing, source="voice")
+            self.log(trailing, message, ok)
+            return False        # command already handled
+
+        self.log(text, "Wake word detected.", True)
+        return True
 
 
 @st.cache_resource
@@ -503,10 +531,15 @@ with centre:
     )
     st.markdown(f'<div class="wave">{bars}</div>', unsafe_allow_html=True)
 
+    # Read from config rather than hard-coded, so swapping the wake-word
+    # model cannot leave the UI telling the user to say the wrong thing.
+    _phrase = (
+        config.WAKE_PHRASE.upper() if wakeword.is_available() else "HI NOVA"
+    )
     st.markdown(
         "<div style=\"text-align:center;font-family:'Share Tech Mono',monospace;"
         "font-size:.78rem;letter-spacing:.16em;color:#7FEAFF;margin:.2rem 0 .9rem\">"
-        "OPTION 1 &nbsp;·&nbsp; JUST SAY &nbsp;&quot;HI NOVA&quot;</div>",
+        f"OPTION 1 &nbsp;·&nbsp; JUST SAY &nbsp;&quot;{_phrase}&quot;</div>",
         unsafe_allow_html=True,
     )
 

@@ -133,6 +133,63 @@ SLEEP_WORDS = [
 ]
 
 
+# =============== WAKE-WORD ENGINE ===============
+#
+# "openwakeword" uses a neural network trained on one phrase, scoring raw
+# audio directly. "keyword" is the old route - transcribe everything, then
+# look for the name in the text - kept as the fallback and for comparison
+# in the report.
+#
+# The dedicated model is not a tuning improvement over keyword matching, it
+# is a different approach. Transcription asks "what words were said?" and
+# then hopes the name survived; the model asks only "did this phrase
+# occur?". It also means audio stops being streamed to a speech service
+# while nobody is talking to the assistant.
+
+WAKE_ENGINE = os.environ.get("VYAS_WAKE_ENGINE", "openwakeword").lower()
+
+# Pretrained models that ship with openWakeWord: alexa, hey_mycroft,
+# hey_jarvis, hey_rhasspy, timer, weather.
+#
+# "hey_jarvis" is used because there is no pretrained model for "nova" -
+# that one has to be trained, which is the next step. Swapping to a custom
+# model is a change to this line and nothing else.
+WAKE_MODEL = os.environ.get("VYAS_WAKE_MODEL", "hey_jarvis")
+
+# onnx runs everywhere; tflite is marginally faster where it is available.
+WAKE_INFERENCE = os.environ.get("VYAS_WAKE_INFERENCE", "onnx")
+
+# Score above which the phrase counts as heard, 0.0 to 1.0.
+#
+# 0.25, not openWakeWord's default of 0.5. That is a measurement, not a
+# preference: across a test session the phrase peaked at 0.50, 0.43, 0.41,
+# 0.34, 0.23 and 0.16, while seventeen seconds of room noise and ordinary
+# speech never exceeded 0.002. The gap between signal and noise is about a
+# hundredfold, so the sensible place to cut is low in that gap rather than
+# in the middle of the detections.
+#
+# The model scores lower than its default assumes because it was trained
+# largely on synthetic English speech; accents outside that range clear the
+# bar by less. Lowering the threshold costs nothing here - there is simply
+# nothing between 0.002 and 0.16 to be confused by.
+#
+# tools/wake_test.py prints live scores. Re-run it after changing the
+# microphone or the room and choose from your own numbers.
+WAKE_THRESHOLD = float(os.environ.get("VYAS_WAKE_THRESHOLD", "0.25"))
+
+# The model expects 80ms of 16 kHz mono audio per frame.
+WAKE_FRAME_SAMPLES = 1280
+WAKE_SAMPLE_RATE = 16000
+
+# The score stays high for several frames as the phrase finishes, so one
+# "hey jarvis" would otherwise trigger three or four times.
+WAKE_COOLDOWN_SECONDS = 2.0
+
+# What to call the wake phrase in messages shown to the user. Derived from
+# the model name so the two cannot drift apart.
+WAKE_PHRASE = WAKE_MODEL.replace("_", " ")
+
+
 # =============== CONVERSATION ===============
 #
 # What the assistant says, and what it accepts as an answer. Kept here so the

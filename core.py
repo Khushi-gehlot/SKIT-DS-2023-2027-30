@@ -29,6 +29,7 @@ import pyttsx3
 import speech_recognition as sr
 
 import config
+import wakeword
 
 try:
     # SAPI5 talks to COM, which must be initialised on every thread that uses it.
@@ -64,6 +65,14 @@ def speak(text: str):
     # Let the speakers fall silent before anyone opens the microphone,
     # otherwise the tail of this sentence lands in the next recording.
     time.sleep(config.SPEAK_SETTLE_SECONDS)
+
+    # Then throw away everything the microphone captured while we talked.
+    #
+    # This matters now the microphone is held open: the stream buffers
+    # continuously, so without draining it the next listen() reads back the
+    # assistant's own voice, and the wake-word model scores audio the
+    # assistant produced itself.
+    drain_mic()
 
 
 # =============== WAKE WORD ===============
@@ -281,9 +290,59 @@ def _get_source():
     global _source
     with _source_lock:
         if _source is None:
-            mic = sr.Microphone(device_index=config.MIC_INDEX)
+            # 16 kHz explicitly: the wake-word model is trained at that rate
+            # and reads frames straight off this stream, so letting the
+            # device pick its own rate would feed it mistimed audio.
+            mic = sr.Microphone(
+                device_index=config.MIC_INDEX,
+                sample_rate=config.WAKE_SAMPLE_RATE,
+            )
             _source = (mic, mic.__enter__())
         return _source[1]
+
+
+# Loudness of the most recent frame read by wait_for_wake_word, so a
+# diagnostic can show whether the microphone is delivering audio at all
+# without having to read the stream a second time and steal frames from
+# the detector.
+_last_level = 0
+
+
+def last_frame_level() -> int:
+    """Peak amplitude of the last wake-word frame, 0 to 32767."""
+    return _last_level
+
+
+def drain_mic():
+    """
+    Discard whatever is sitting in the microphone buffer.
+
+    Called after the assistant speaks, and after a wake word fires, so the
+    next recording starts from now rather than from audio captured while
+    something else was happening. Does nothing if the microphone was never
+    opened - this must never be the thing that opens it.
+    """
+    global _source
+    with _source_lock:
+        if _source is None:
+            return
+        stream = _source[1].stream
+
+    try:
+        # get_read_available reports frames waiting; read exactly those and
+        # throw them away. Reading a fixed amount instead would block when
+        # the buffer happens to be emptier than guessed.
+        pending = stream.pyaudio_stream.get_read_available()
+        while pending > 0:
+            stream.read(min(pending, 4096))
+            pending = stream.pyaudio_stream.get_read_available()
+    except Exception:
+        # A drain failing is not worth interrupting anything for; the worst
+        # case is the old behaviour.
+        pass
+
+    # The model's rolling buffer holds the discarded audio too.
+    wakeword.reset()
 
 
 def release_mic():
@@ -297,6 +356,70 @@ def release_mic():
                 pass
             _source = None
             _calibrated = False
+
+
+def wait_for_wake_word(
+    timeout: float | None = None,
+    should_stop=None,
+    on_score=None,
+) -> bool:
+    """
+    Listen until the wake phrase is heard. True if it was, False otherwise.
+
+    Reads raw frames off the shared microphone and scores each one with the
+    wake-word model. Nothing is transcribed and no audio leaves the machine
+    while this runs - the speech service is only reached once the phrase has
+    fired and a real command follows.
+
+    `should_stop` is polled between frames so the UI can interrupt an
+    always-on loop; `on_score` receives every score, which is what lets
+    tools/wake_test.py show a live meter.
+
+    Returns False rather than raising on any failure, so a caller can fall
+    back to the transcribe-and-match route.
+    """
+    if not wakeword.is_available():
+        return False
+    if wakeword.get_model() is None:
+        return False
+
+    deadline = None if timeout is None else time.monotonic() + timeout
+
+    try:
+        source = _get_source()
+    except Exception as e:
+        print(f"Microphone error: {type(e).__name__}: {e}")
+        return False
+
+    while True:
+        if should_stop is not None and should_stop():
+            return False
+        if deadline is not None and time.monotonic() > deadline:
+            return False
+
+        try:
+            frame = source.stream.read(config.WAKE_FRAME_SAMPLES)
+        except Exception as e:
+            print(f"Microphone read failed: {type(e).__name__}: {e}")
+            return False
+
+        global _last_level
+        try:
+            import numpy as _np
+            samples = _np.frombuffer(frame, dtype=_np.int16)
+            _last_level = int(_np.abs(samples).max()) if samples.size else 0
+        except Exception:
+            _last_level = 0
+
+        # Scored once per frame. Running inference again for the callback
+        # would double the CPU cost and advance the model's rolling buffer
+        # twice over the same audio.
+        value = wakeword.score(frame)
+        if on_score is not None:
+            on_score(value)
+
+        if wakeword.accept(value):
+            return True
 
 
 def calibrate(duration: float = config.CALIBRATION_SECONDS):
