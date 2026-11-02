@@ -84,76 +84,27 @@ class AlwaysOnController:
     # --- the loop ---
 
     def _loop(self):
-        """Wait for a wake word, then take commands until a sleep word."""
+        """
+        Run the conversation, reporting each turn to the UI.
+
+        The loop itself lives in pipeline.Conversation: waking, greeting,
+        taking commands, confirming ambiguous ones and going back to sleep
+        are not UI concerns, and keeping them here made them impossible to
+        test without a browser. This method is now only the bridge between
+        that object and the Streamlit page.
+        """
         try:
-            while not self._stop.is_set():
-                if wakeword.is_available():
-                    if not self._wait_for_model_wake():
-                        continue
-                else:
-                    if not self._wait_for_transcribed_wake():
-                        continue
-
-                speak(core.greeting())
-
-                while not self._stop.is_set():
-                    cmd = transcribe()
-                    if self._stop.is_set() or not cmd:
-                        continue
-
-                    if is_sleep_word(cmd):
-                        speak(core.farewell())
-                        self.log(cmd, "Session ended.", True)
-                        break
-
-                    ok, message = speak_and_run(cmd, source="voice")
-                    self.log(cmd, message, ok)
+            conversation = pipeline.Conversation(
+                on_turn=lambda turn: self.log(
+                    turn.heard, turn.message, turn.success
+                ),
+                should_stop=self._stop.is_set,
+            )
+            conversation.run()
         except Exception as e:
             self.log("(loop crashed)", str(e), False)
         finally:
             self._stop.set()
-
-    def _wait_for_model_wake(self) -> bool:
-        """
-        Block on the wake-word model until the phrase is heard.
-
-        Nothing is transcribed and no audio leaves the machine while this
-        waits - the speech service is only reached for the command that
-        follows. True when the phrase fired, False when the loop was asked
-        to stop.
-        """
-        heard = core.wait_for_wake_word(should_stop=self._stop.is_set)
-        if not heard:
-            return False
-        self.log(f'"{config.WAKE_PHRASE}"', "Wake word detected.", True)
-        return True
-
-    def _wait_for_transcribed_wake(self) -> bool:
-        """
-        The original route: transcribe everything, look for the name in the
-        text. Kept for machines without openWakeWord, and because it is the
-        comparison the report is built on.
-        """
-        text = transcribe()
-        if self._stop.is_set() or not text:
-            return False
-
-        if not is_wake_word(text):
-            self.log(text, "Ignored — no wake word.", False)
-            return False
-
-        # "nova open notepad" said as one breath: run it straight away.
-        # Saying both together is also markedly more reliable here, since
-        # the engine gets a full phrase instead of one short word.
-        trailing = core.strip_wake_word(text)
-        if trailing:
-            self.log(text, "Wake word + command.", True)
-            ok, message = speak_and_run(trailing, source="voice")
-            self.log(trailing, message, ok)
-            return False        # command already handled
-
-        self.log(text, "Wake word detected.", True)
-        return True
 
 
 @st.cache_resource

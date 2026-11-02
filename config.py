@@ -236,6 +236,28 @@ AUTO_START_LISTENING = True
 # blocked while it runs, so it cannot listen indefinitely.
 SESSION_SILENCE_LIMIT = 3
 
+# The same, for the always-on conversation. Higher than the button session
+# because nothing is blocked while it waits: the cost of staying awake a
+# little longer is nil, and a user who is slow to speak - which is the whole
+# audience for this - should not have to say the wake word again.
+CONVERSATION_SILENCE_LIMIT = 5
+
+# Pause before retrying when waiting for the wake word returned instantly,
+# which means it is not actually waiting - a model that failed to load, or
+# a microphone that has disappeared. Stops the loop spinning a core.
+WAKE_RETRY_SECONDS = 1.0
+
+# Most steps a single sentence may be split into. A sentence that appears
+# to contain six commands has almost certainly been mis-split rather than
+# genuinely asked for, and running six wrong things is far worse than
+# running one.
+MAX_CHAINED_COMMANDS = 4
+
+# Pause between the steps of a chained command, so each one has landed
+# before the next starts. A browser launched by step one is not ready to
+# be typed into the instant the launch call returns.
+STEP_SETTLE_SECONDS = 1.2
+
 # How close a short utterance must be to the name to count as the wake word.
 # 1.0 is exact; lower accepts more mishearings but risks waking on nothing.
 WAKE_FUZZY_CUTOFF = 0.7
