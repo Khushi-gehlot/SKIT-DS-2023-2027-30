@@ -30,7 +30,10 @@ down or the wifi dropped. The keyword engine means the assistant degrades to
 
 from __future__ import annotations
 
+import re
+
 import config
+from command_map import COMMANDS
 from intent import Intent
 
 from . import keyword, llm
@@ -129,14 +132,83 @@ def get_intent(text: str, source: str = "text") -> Intent:
     return matched
 
 
+# Words people use to chain two requests together, strongest first.
+#
+# Order matters. "and then" is almost always a sequence, while a bare "and"
+# is usually part of one phrase - "search for cats and dogs". Trying the
+# unambiguous connectors first means the risky one is only reached when
+# nothing else explains the sentence.
+_CONNECTORS = [
+    r"\s+and\s+then\s+",
+    r"\s+,?\s*then\s+",
+    r"\s+after\s+that\s*,?\s+",
+    r"\s+and\s+also\s+",
+    r"\s+and\s+",
+]
+
+
 def get_intents(text: str, source: str = "text") -> list[Intent]:
     """
-    Resolve text to one or more Intents.
+    Resolve text to one or more Intents, in the order they should run.
 
-    Multi-step requests ("open Chrome and search for X") are a Sprint 3
-    deliverable; for now this returns exactly one. It exists already so
-    callers are written against the final shape.
+    "open chrome and search for python tutorials" is two things, and a user
+    should be able to say them in one breath - having to wait for the first
+    to finish before asking for the second is exactly the friction this
+    assistant exists to remove.
+
+    Splitting is deliberately conservative. A sentence is only treated as
+    several commands when *every* part independently resolves to something
+    the system can do. That is what stops "search for cats and dogs" being
+    torn in half: "dogs" is not a command, so the split is rejected and the
+    whole sentence goes through as one request.
     """
+    if not text or not text.strip():
+        return [get_intent(text, source)]
+
+    # A phrase listed verbatim in command_map is never split: if someone
+    # wrote it down as one command, it is one command.
+    #
+    # Checked against the table directly rather than by asking the keyword
+    # matcher whether it found an "exact" match. The generative rules -
+    # "search for X", "open the Y folder" - report exact confidence for a
+    # sentence they only partly explain, because everything after the
+    # trigger becomes the query. Trusting that would block every chain
+    # whose second half happens to start with one of them.
+    if text.lower().strip() in COMMANDS:
+        return [get_intent(text, source)]
+
+    for pattern in _CONNECTORS:
+        parts = [p.strip() for p in re.split(pattern, text, flags=re.IGNORECASE)]
+        parts = [p for p in parts if p]
+        if len(parts) < 2:
+            continue
+        if len(parts) > config.MAX_CHAINED_COMMANDS:
+            continue
+
+        # A real command is at least two words. This is what keeps "turn
+        # the volume up and down" and "search for cats and dogs" intact:
+        # the fragment after "and" is a single word that happens to mean
+        # something on its own ("down" is a scroll direction), and without
+        # this it would be run as a command nobody asked for.
+        if any(len(part.split()) < 2 for part in parts):
+            continue
+
+        resolved = [get_intent(part, source) for part in parts]
+
+        # Every part has to be understood. One weak guess in a chain is
+        # worse than treating the sentence as a single request: the user
+        # gets something they did not ask for *and* loses what they did.
+        #
+        # The bar is CONFIDENCE_PARTIAL rather than MIN_CONFIDENCE because
+        # the prefix rules - "search for X", "open the Y folder" - report a
+        # partial match by design. Holding chains to the stricter bar
+        # rejected exactly the phrasings this feature exists to support.
+        if all(
+            i.is_understood() and i.confidence >= config.CONFIDENCE_PARTIAL
+            for i in resolved
+        ):
+            return resolved
+
     return [get_intent(text, source)]
 
 
