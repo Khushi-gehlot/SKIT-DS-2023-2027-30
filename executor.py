@@ -387,6 +387,58 @@ def _browser_submit(intent: Intent) -> ExecutionResult:
     )
 
 
+@handler("browser_fields")
+def _browser_fields(intent: Intent) -> ExecutionResult:
+    """
+    Read out what can be filled in on this page.
+
+    The form equivalent of listing links, and the step that has to come
+    first: someone who cannot see the screen has no way of knowing a form
+    is there, or what it is asking for.
+    """
+    _ensure_controlled_browser()
+    return _browser(
+        lambda: browser_actions.browser_describe_fields(),
+        intent, "{value}",
+    )
+
+
+@handler("browser_fill")
+def _browser_fill(intent: Intent) -> ExecutionResult:
+    """Fill a numbered field: "fill field two with John"."""
+    _ensure_controlled_browser()
+
+    index = intent.params.get("index")
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return ExecutionResult.fail(
+            "Say which field, for example 'fill field two with John'.", intent
+        )
+
+    value = intent.params.get("value")
+    if not value:
+        value = actions.ask_for_query(f"What should I put in field {index}?")
+    if not value:
+        return ExecutionResult.fail("Nothing to fill in.", intent)
+
+    return _browser(
+        lambda: browser_actions.browser_fill_field(index, value),
+        intent, "{value}",
+    )
+
+
+@handler("browser_button")
+def _browser_button(intent: Intent) -> ExecutionResult:
+    """Press a button by name, or the form's submit button."""
+    _ensure_controlled_browser()
+    name = intent.params.get("button") or intent.target
+    return _browser(
+        lambda: browser_actions.browser_submit_form(name),
+        intent, "Pressed {value}",
+    )
+
+
 @handler("browser_nav")
 def _browser_nav(intent: Intent) -> ExecutionResult:
     moves = {

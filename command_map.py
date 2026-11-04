@@ -347,8 +347,47 @@ COMMANDS: dict[str, tuple[str, str | None]] = {
 
     "press enter": ("browser_submit", None),
     "hit enter": ("browser_submit", None),
-    "submit": ("browser_submit", None),
-    "submit the form": ("browser_submit", None),
+
+    # ===================== FORMS =====================
+    #
+    # Filling in a form is where an assistant earns its place for someone
+    # who cannot use a mouse: tabbing through twenty inputs to reach the
+    # right one is exactly the work this removes. Listing the fields comes
+    # first - nobody can fill in a form they cannot see.
+
+    "what can i fill in": ("browser_fields", None),
+    "what can i fill": ("browser_fields", None),
+    "list fields": ("browser_fields", None),
+    "list the fields": ("browser_fields", None),
+    "show fields": ("browser_fields", None),
+    "show me the fields": ("browser_fields", None),
+    "read the form": ("browser_fields", None),
+    "read form": ("browser_fields", None),
+    "what fields are there": ("browser_fields", None),
+    "describe the form": ("browser_fields", None),
+    "is there a form": ("browser_fields", None),
+
+    "submit": ("browser_button", None),
+    "submit the form": ("browser_button", None),
+    "submit form": ("browser_button", None),
+    "send the form": ("browser_button", None),
+    "press the button": ("browser_button", None),
+    "click the button": ("browser_button", None),
+    "press submit": ("browser_button", "submit"),
+    "click submit": ("browser_button", "submit"),
+    "press next": ("browser_button", "next"),
+    "click next": ("browser_button", "next"),
+    "press continue": ("browser_button", "continue"),
+    "click continue": ("browser_button", "continue"),
+    "press save": ("browser_button", "save"),
+    "click save": ("browser_button", "save"),
+    "press ok": ("browser_button", "ok"),
+    "press cancel": ("browser_button", "cancel"),
+    "press search": ("browser_button", "search"),
+    "press sign in": ("browser_button", "sign in"),
+    "press log in": ("browser_button", "log in"),
+    "sign in": ("browser_button", "sign in"),
+    "log in": ("browser_button", "log in"),
 
     # ===================== APPS (any installed program) =====================
 

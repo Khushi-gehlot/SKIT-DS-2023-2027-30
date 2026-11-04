@@ -33,7 +33,7 @@ import queue
 import re
 import threading
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from core import speak
@@ -82,6 +82,42 @@ class Link:
     # the wrong one fails with "something may be covering it". Holding the
     # handle means we click exactly what we offered the user.
     element: object | None = None
+
+
+@dataclass
+class Field:
+    """
+    One thing on a form that can be filled in.
+
+    Carries its own element handle for the same reason Link does, and its
+    current value so the assistant can say "the email box already has
+    something in it" rather than silently overwriting it.
+    """
+
+    index: int
+    label: str
+    kind: str                       # text | password | checkbox | radio | select | textarea
+    value: str = ""
+    options: list[str] = field(default_factory=list)   # for select
+    required: bool = False
+    element: object | None = None
+
+    def describe(self) -> str:
+        """How this field should be read out loud."""
+        bits = [f"{self.index}. {self.label}"]
+        if self.kind not in ("text", "textarea"):
+            bits.append(f"({self.kind})")
+        if self.kind == "select" and self.options:
+            shown = ", ".join(self.options[:4])
+            more = "..." if len(self.options) > 4 else ""
+            bits.append(f"- options: {shown}{more}")
+        elif self.kind in ("checkbox", "radio"):
+            bits.append("- ticked" if self.value == "true" else "- not ticked")
+        elif self.value:
+            bits.append(f"- currently '{self.value[:30]}'")
+        if self.required:
+            bits.append("[required]")
+        return " ".join(bits)
 
 
 # =============== WORKER THREAD ===============
@@ -616,6 +652,228 @@ class _Session:
                 pass  # submitted, page just slow
         return value
 
+    # --- forms ---
+
+    def fields(self, limit: int = 20) -> list[Field]:
+        """
+        Every fillable control on the page, with a readable label.
+
+        This is the form equivalent of links(), and it matters more than it
+        sounds: someone who cannot see the screen has no way to know a form
+        exists, let alone what it wants. "What can I fill in here?" has to
+        be answerable before filling anything in is useful.
+        """
+        page = self.page()
+        found: list[Field] = []
+
+        selector = (
+            "input:not([type=hidden]):not([type=submit]):not([type=button]), "
+            "textarea, select"
+        )
+        try:
+            elements = page.locator(selector).all()
+        except PlaywrightError:
+            return []
+
+        for element in elements:
+            if len(found) >= limit:
+                break
+            try:
+                if not element.is_visible(timeout=400):
+                    continue
+            except Exception:
+                continue
+
+            try:
+                tag = element.evaluate("e => e.tagName.toLowerCase()")
+                input_type = (
+                    element.get_attribute("type") or "text"
+                ).lower()
+                kind = (
+                    "select" if tag == "select"
+                    else "textarea" if tag == "textarea"
+                    else input_type
+                )
+
+                label = self._label_for(element) or kind
+                options = []
+                if kind == "select":
+                    options = [
+                        o.strip() for o in
+                        element.locator("option").all_text_contents()
+                        if o.strip()
+                    ]
+
+                if kind in ("checkbox", "radio"):
+                    value = "true" if element.is_checked() else "false"
+                elif kind == "password":
+                    # Never read a password field's contents. It would end
+                    # up in the log, on screen, and spoken aloud.
+                    value = "(hidden)" if element.input_value() else ""
+                else:
+                    value = (element.input_value() or "")[:60]
+
+                required = element.get_attribute("required") is not None
+            except Exception:
+                continue
+
+            found.append(Field(
+                index=len(found) + 1,
+                label=_tidy(label)[:50] or kind,
+                kind=kind,
+                value=value,
+                options=options[:12],
+                required=required,
+                element=element,
+            ))
+
+        return found
+
+    @staticmethod
+    def _label_for(element) -> str:
+        """
+        The most human name for a control.
+
+        Tried in the order a person would read them: the visible <label>,
+        then the accessible name, then the placeholder, then the name
+        attribute. Falling back to the raw name attribute is ugly
+        ("user_email_1") but still better than calling everything "text".
+        """
+        for getter in (
+            lambda: element.evaluate(
+                "e => (e.labels && e.labels[0]) ? e.labels[0].innerText : ''"
+            ),
+            lambda: element.get_attribute("aria-label"),
+            lambda: element.get_attribute("placeholder"),
+            lambda: element.get_attribute("title"),
+            lambda: element.get_attribute("name"),
+        ):
+            try:
+                text = (getter() or "").strip()
+                if text:
+                    return text
+            except Exception:
+                continue
+        return ""
+
+    def fill_field(self, index: int, value: str) -> str:
+        """Fill the field at a position previously read out by fields()."""
+        found = self.fields()
+        if not 1 <= index <= len(found):
+            raise BrowserError(
+                f"There is no field {index}. I can see {len(found)}."
+            )
+        target = found[index - 1]
+
+        if target.kind == "password":
+            # Refused deliberately, not a limitation. Speaking a password
+            # at a microphone puts it through a transcription service and
+            # into the log; the browser's own password manager fills these
+            # without anyone saying it out loud.
+            raise BrowserError(
+                "I will not type into a password box. Let the browser's "
+                "saved password fill it, or type it yourself."
+            )
+
+        try:
+            target.element.scroll_into_view_if_needed(timeout=3000)
+            if target.kind == "select":
+                return self._choose(target, value)
+            if target.kind in ("checkbox", "radio"):
+                return self._set_checked(target, value)
+            target.element.fill("")
+            target.element.fill(value)
+        except BrowserError:
+            raise
+        except PlaywrightError:
+            raise BrowserError(f"I could not fill in {target.label}.") from None
+
+        return f"{target.label}: {value}"
+
+    def _choose(self, target: Field, wanted: str) -> str:
+        """Pick a dropdown option by what it says, not by its value attribute."""
+        wanted_norm = _normalise(wanted)
+        for option in target.options:
+            if _normalise(option) == wanted_norm:
+                target.element.select_option(label=option)
+                return f"{target.label}: {option}"
+
+        # Nothing matched exactly, so accept an unambiguous partial - "visa"
+        # for "Visa / Mastercard". Ambiguous matches are refused rather than
+        # guessed, because picking the wrong option on a form is not
+        # something the user can easily see or undo.
+        partial = [o for o in target.options if wanted_norm in _normalise(o)]
+        if len(partial) == 1:
+            target.element.select_option(label=partial[0])
+            return f"{target.label}: {partial[0]}"
+        if len(partial) > 1:
+            raise BrowserError(
+                f"'{wanted}' matches {len(partial)} options: "
+                f"{', '.join(partial[:4])}. Which one?"
+            )
+        raise BrowserError(
+            f"{target.label} has no option like '{wanted}'. "
+            f"The choices are: {', '.join(target.options[:6])}."
+        )
+
+    @staticmethod
+    def _set_checked(target: Field, value: str) -> str:
+        wanted = _normalise(value) in ("yes", "true", "on", "tick", "ticked",
+                                       "check", "checked", "1")
+        if wanted:
+            target.element.check()
+        else:
+            target.element.uncheck()
+        return f"{target.label}: {'ticked' if wanted else 'unticked'}"
+
+    def click_button(self, wanted: str | None = None) -> str:
+        """
+        Press a button by its text - "submit", "next", "continue".
+
+        Separate from click_by_text because buttons are not links: they are
+        <button>, <input type=submit> or a div with a role, and the link
+        matcher does not see them.
+        """
+        page = self.page()
+        attempts = []
+
+        if wanted:
+            attempts += [
+                lambda: page.get_by_role("button", name=wanted, exact=False),
+                lambda: page.locator(f'input[type="submit"][value*="{wanted}" i]'),
+                lambda: page.locator(f'button:has-text("{wanted}")'),
+            ]
+        else:
+            # No name given: the submit button is the sensible default,
+            # since "submit the form" is the common case.
+            attempts += [
+                lambda: page.locator('input[type="submit"]:visible'),
+                lambda: page.locator('button[type="submit"]:visible'),
+                lambda: page.get_by_role("button", name=re.compile(
+                    r"submit|send|continue|next|search|save|sign in|log in",
+                    re.I,
+                )),
+            ]
+
+        for build in attempts:
+            try:
+                button = build().first
+                if button.count() == 0 or not button.is_visible(timeout=1200):
+                    continue
+                name = _tidy(button.inner_text() or wanted or "button")
+                button.click(timeout=ACTION_TIMEOUT)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                except PlaywrightTimeout:
+                    pass
+                return name[:40] or "button"
+            except PlaywrightError:
+                continue
+
+        raise BrowserError(
+            f"I could not find a {wanted or 'submit'} button on this page."
+        )
+
     def press_key(self, key: str) -> str:
         page = self.page()
         try:
@@ -651,6 +909,17 @@ _session = _Session()
 
 def _normalise(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", text.lower()).strip()
+
+
+def _tidy(text: str) -> str:
+    """
+    Collapse whitespace but keep the words as the page wrote them.
+
+    _normalise is for comparing, and strips case and punctuation to do it.
+    A field label is read out to the user, so "Email address" has to stay
+    "Email address" rather than becoming "email address".
+    """
+    return re.sub(r"\s+", " ", (text or "").replace("\xa0", " ")).strip(" :*\t\n")
 
 
 def _best_match(wanted: str, candidates: list[Link]) -> Link | None:
@@ -870,6 +1139,43 @@ def browser_press_enter() -> str:
     _worker.submit(lambda: _session.press_key("Enter"))
     speak("Submitted.")
     return "Enter"
+
+
+# --- forms ---
+
+def browser_fields(limit: int = 20) -> list[Field]:
+    """What can be filled in on this page."""
+    _sync()
+    return _worker.submit(lambda: _session.fields(limit))
+
+
+def browser_describe_fields(limit: int = 12) -> str:
+    """Read the form out loud, numbered so a field can be named by position."""
+    found = browser_fields(limit)
+    if not found:
+        speak("I cannot see anything to fill in on this page.")
+        return "No fields found."
+
+    speak(f"There are {len(found)} things I can fill in.")
+    lines = [f.describe() for f in found]
+    for line in lines:
+        speak(line)
+    return "\n".join(lines)
+
+
+def browser_fill_field(index: int, value: str) -> str:
+    """Fill the numbered field from the last listing."""
+    result = _worker.submit(lambda: _session.fill_field(index, value))
+    speak(f"Set {result}")
+    return result
+
+
+def browser_submit_form(button: str | None = None) -> str:
+    """Press submit, or a named button."""
+    speak(f"Pressing {button or 'submit'}")
+    pressed = _worker.submit(lambda: _session.click_button(button))
+    speak(f"Pressed {pressed}")
+    return pressed
 
 
 def browser_back() -> str:

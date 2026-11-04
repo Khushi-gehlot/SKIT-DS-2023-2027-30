@@ -553,6 +553,10 @@ with right:
                      "forget my voice"],
         "APPS": ["open chrome", "open notepad", "open calculator", "open whatsapp"],
         "WEB": ["open youtube", "search google for news", "list links", "go back"],
+        # Forms are used in order - list, fill, submit - so they are listed
+        # in that order rather than alphabetically.
+        "FORMS": ["what can i fill in", "fill field one with Khushi",
+                  "set the second field to yes", "submit the form"],
         "SYSTEM": ["battery", "take screenshot", "volume up", "volume down"],
         "PLACES": ["open downloads", "open documents", "display settings", "wifi settings"],
     }
