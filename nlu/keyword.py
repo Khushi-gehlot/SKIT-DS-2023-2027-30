@@ -87,6 +87,102 @@ _BROWSER_OPEN = re.compile(
 _BROWSER_HINT = re.compile(r"\b(?:in|using|with)\s+(?:the\s+)?browser\b", re.IGNORECASE)
 
 
+_ORDINAL_VALUES = {
+    "first": 1, "1st": 1, "one": 1,
+    "second": 2, "2nd": 2, "two": 2,
+    "third": 3, "3rd": 3, "three": 3,
+    "fourth": 4, "4th": 4, "four": 4,
+    "fifth": 5, "5th": 5, "five": 5,
+    "sixth": 6, "6th": 6, "six": 6,
+    "seventh": 7, "7th": 7, "seven": 7,
+    "eighth": 8, "8th": 8, "eight": 8,
+    "ninth": 9, "9th": 9, "nine": 9,
+    "tenth": 10, "10th": 10, "ten": 10,
+}
+
+_FIELD_NUMBER = r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth" \
+                r"|one|two|three|four|five|six|seven|eight|nine|ten" \
+                r"|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|\d{1,2}"
+
+
+def _original_case(pattern: "re.Pattern", text: str, fallback: str | None) -> str | None:
+    """
+    Recover a captured value with its original capitalisation.
+
+    Matching happens against lowercased, punctuation-stripped text, which
+    is right for recognising commands and wrong for the data inside them:
+    typing a name into a form as "john" rather than "John" is visibly
+    wrong, and the user cannot see the page to correct it. So the same
+    pattern is re-run against the untouched text and that capture is
+    preferred when it is there.
+    """
+    try:
+        match = pattern.search(text)
+        if match:
+            value = (match.group("value") or "").strip()
+            if value:
+                return value.rstrip(".,!?")
+    except (re.error, IndexError):
+        pass
+    return (fallback or "").strip() or None
+
+
+def _as_number(word: str | None) -> int | None:
+    """"second" or "2" or "2nd" -> 2. None if it is not a number at all."""
+    if not word:
+        return None
+    word = word.strip().lower()
+    if word in _ORDINAL_VALUES:
+        return _ORDINAL_VALUES[word]
+    return int(word) if word.isdigit() else None
+
+
+# "fill field two with John", "set the third field to yes"
+_FILL_BY_NUMBER = re.compile(
+    r"\b(?:fill|set|put|type|enter|write)\b\s*(?:in\s+)?(?:the\s+)?"
+    rf"(?:field|box|input)\s+(?:number\s+)?(?P<index>{_FIELD_NUMBER})\b"
+    r"(?:\s+(?:with|to|as)\s+(?P<value>.+?))?\s*$",
+    re.IGNORECASE,
+)
+
+# "set the third field to visa", "fill the second box with yes" - the
+# number comes before the noun, which is how most people say it.
+_FILL_ORDINAL_FIRST = re.compile(
+    r"\b(?:fill|set|put|type|enter|write)\b\s*(?:in\s+)?(?:the\s+)?"
+    rf"(?P<index>{_FIELD_NUMBER})\s+(?:field|box|input)\b"
+    r"(?:\s+(?:with|to|as)\s+(?P<value>.+?))?\s*$",
+    re.IGNORECASE,
+)
+
+# "put John in field two", "type yes into box 3" - value stated first.
+_FILL_VALUE_FIRST = re.compile(
+    r"\b(?:fill|set|put|type|enter|write)\b\s+(?P<value>.+?)\s+"
+    r"(?:in|into|in the|into the)\s+(?:the\s+)?(?:field|box|input)\s+"
+    rf"(?:number\s+)?(?P<index>{_FIELD_NUMBER})\s*$",
+    re.IGNORECASE,
+)
+
+# "what can I fill in", "list the fields", "read the form"
+_FORM_FIELDS = re.compile(
+    r"\b(?:what\s+(?:can\s+i\s+)?fill|list\s+(?:the\s+)?(?:fields|form)"
+    r"|read\s+(?:the\s+)?form|show\s+(?:me\s+)?(?:the\s+)?(?:fields|form)"
+    r"|what\s+(?:fields|boxes)\b"
+    # "fill in the form" is a request for help with it, not an instruction
+    # to type the words "the form" somewhere. Listing what it wants is the
+    # only sensible first move.
+    r"|fill\s+(?:in\s+)?(?:the\s+)?form\b)",
+    re.IGNORECASE,
+)
+
+# "press the submit button", "click continue button", "submit the form"
+_PRESS_BUTTON = re.compile(
+    r"\b(?:press|click|hit|tap|push)\b\s*(?:on\s+)?(?:the\s+)?"
+    r"(?P<name>.+?)\s+button\s*$"
+    r"|^(?:please\s+)?submit(?:\s+the\s+form)?\s*$",
+    re.IGNORECASE,
+)
+
+
 # "type github in the search box", "enter my email in the email field",
 # "search for cats and press enter", "type hello"
 _TYPE_INTO = re.compile(
@@ -136,6 +232,49 @@ def _app_intent(cleaned: str, text: str, source: str) -> Intent | None:
 
 def _browser_intent(cleaned: str, text: str, source: str) -> Intent | None:
     """Match the browser commands that carry an argument. None if no match."""
+
+    # --- forms ---
+    #
+    # Checked before _TYPE_INTO, which would otherwise swallow "fill field
+    # two with John" as "type 'field two with John'".
+
+    if _FORM_FIELDS.search(cleaned):
+        return Intent(
+            action="browser_fields",
+            confidence=config.CONFIDENCE_PARTIAL,
+            raw_text=text, source=source, engine=ENGINE,
+        )
+
+    for pattern in (_FILL_BY_NUMBER, _FILL_ORDINAL_FIRST, _FILL_VALUE_FIRST):
+        match = pattern.search(cleaned)
+        if not match:
+            continue
+        index = _as_number(match.group("index"))
+        if index is None:
+            continue
+        return Intent(
+            action="browser_fill",
+            target="field",
+            params={
+                "index": index,
+                "value": _original_case(pattern, text, match.group("value")),
+            },
+            confidence=config.CONFIDENCE_PARTIAL,
+            raw_text=text, source=source, engine=ENGINE,
+        )
+
+    match = _PRESS_BUTTON.search(cleaned)
+    if match:
+        name = (match.group("name") or "").strip() or None
+        # "press the link button" is a link click, not a form button.
+        if name not in ("link", "enter", "key"):
+            return Intent(
+                action="browser_button",
+                target=name,
+                params={"button": name},
+                confidence=config.CONFIDENCE_PARTIAL,
+                raw_text=text, source=source, engine=ENGINE,
+            )
 
     # "type github in the search box"
     match = _TYPE_INTO.match(cleaned)
