@@ -1,6 +1,6 @@
 # streamlit_app.py
 """
-Nova Voice Assistant — single-process Streamlit app.
+Jarvis Voice Assistant — single-process Streamlit app.
 
 There is no web server and no HTTP layer. This app imports the command router
 directly and calls the automation functions in-process, so the whole assistant
@@ -229,7 +229,7 @@ def listen_once() -> tuple[bool, str, str]:
 import hud
 
 st.set_page_config(
-    page_title="NOVA — Voice Assistant HUD",
+    page_title="JARVIS — Voice Assistant HUD",
     page_icon="🎙️",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -394,8 +394,8 @@ st.markdown(
       <div class="hud-brand">
         <div class="hud-mark"><i></i></div>
         <div>
-          <div class="hud-name">NOVA</div>
-          <div class="hud-tag">NEURAL OPERATIONS &amp; VOICE ASSISTANT</div>
+          <div class="hud-name">JARVIS</div>
+          <div class="hud-tag">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
         </div>
       </div>
       <div class="hud-meta">
@@ -468,7 +468,7 @@ with centre:
           <div class="ring r1"></div><div class="ring r2"></div>
           <div class="ring r3"></div><div class="ring r4"></div>
           <div class="ring core">
-            <div class="core-name">NOVA</div>
+            <div class="core-name">JARVIS</div>
             <div class="core-state">{state_text}</div>
           </div>
         </div></div>
@@ -485,7 +485,7 @@ with centre:
     # Read from config rather than hard-coded, so swapping the wake-word
     # model cannot leave the UI telling the user to say the wrong thing.
     _phrase = (
-        config.WAKE_PHRASE.upper() if wakeword.is_available() else "HI NOVA"
+        config.WAKE_PHRASE.upper() if wakeword.is_available() else "HEY JARVIS"
     )
     st.markdown(
         "<div style=\"text-align:center;font-family:'Share Tech Mono',monospace;"

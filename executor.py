@@ -364,8 +364,15 @@ def _browser_click(intent: Intent) -> ExecutionResult:
 
 @handler("browser_type")
 def _browser_type(intent: Intent) -> ExecutionResult:
-    """Type into a field. The field hint is optional - most pages have one
-    obvious input, and making the user describe it defeats the point."""
+    """
+    Type into a text field, wherever the user happens to be.
+
+    Two routes, chosen by what is in front of the user. On a web page the
+    browser layer can find the field by its label, which is far more
+    reliable than hoping the caret is in the right place. Everywhere else -
+    Notepad, a WhatsApp message box, a spreadsheet cell - there is no such
+    structure to query, so the text goes to whatever has keyboard focus.
+    """
     value = intent.params.get("value")
     if not value:
         value = actions.ask_for_query("What should I type?")
@@ -374,10 +381,34 @@ def _browser_type(intent: Intent) -> ExecutionResult:
 
     field = intent.params.get("field")
     submit = bool(intent.params.get("submit"))
-    return _browser(
-        lambda: browser_actions.browser_type(value, field, submit),
-        intent, "Typed {value}",
-    )
+    newline = bool(intent.params.get("newline"))
+
+    title = actions.active_window_title()
+
+    # The browser route only applies when the browser is both under our
+    # control and actually in front. Typing into a background page the user
+    # cannot see would look like the command silently failed.
+    if (
+        not newline
+        and browser_actions.browser_is_running()
+        and actions._looks_like_browser(title)
+    ):
+        return _browser(
+            lambda: browser_actions.browser_type(value, field, submit),
+            intent, "Typed {value}",
+        )
+
+    if actions.type_text(value, submit=submit, newline=newline):
+        return ExecutionResult.ok(f"Typed: {value}", intent, data=value)
+    return ExecutionResult.fail("I could not type that.", intent)
+
+
+@handler("type_clear")
+def _type_clear(intent: Intent) -> ExecutionResult:
+    """Empty the focused field, for correcting a misrecognised dictation."""
+    if actions.clear_field():
+        return ExecutionResult.ok("Cleared the field.", intent)
+    return ExecutionResult.fail("I could not clear that.", intent)
 
 
 @handler("browser_submit")
@@ -385,6 +416,32 @@ def _browser_submit(intent: Intent) -> ExecutionResult:
     return _browser(
         lambda: browser_actions.browser_press_enter(), intent, "Pressed Enter."
     )
+
+
+@handler("close_app")
+def _close_app(intent: Intent) -> ExecutionResult:
+    """
+    Close a window the user named, rather than the one in front.
+
+    "close window" remains Alt+F4 on the focused window, which is what the
+    user means when they do not name one. Naming one has to reach that
+    window without the user bringing it to the front first, since bringing
+    it to the front is exactly what they cannot do.
+    """
+    name = intent.params.get("app") or intent.target
+    if not name:
+        return ExecutionResult.fail("Say which window to close.", intent)
+
+    if actions.close_named_window(name):
+        return ExecutionResult.ok(f"Closed {name}.", intent)
+    return ExecutionResult.fail(f"Did not close {name}.", intent)
+
+
+@handler("list_windows")
+def _list_windows(intent: Intent) -> ExecutionResult:
+    """Read out what is open, so one can be named."""
+    titles = actions.say_open_windows()
+    return ExecutionResult.ok(f"{len(titles)} windows open.", intent, data=titles)
 
 
 @handler("browser_fields")

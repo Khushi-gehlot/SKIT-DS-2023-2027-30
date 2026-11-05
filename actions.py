@@ -673,3 +673,193 @@ def check_voice():
     speak(f"That scored {score:.0%}. Threshold is {threshold:.0%}, so that is {verdict}.")
     print(f"  similarity {score:.3f}  threshold {threshold:.3f}  -> {verdict}")
     return score
+
+
+# =============== TYPING ANYWHERE ===============
+#
+# Dictation into whatever window currently has focus: Notepad, a WhatsApp
+# message box, a search bar, a spreadsheet cell. The browser has its own
+# typing path that locates a field by label, but that only works on a web
+# page - everywhere else the only thing we can rely on is that the user (or
+# a previous command) has already put the caret somewhere.
+
+def active_window_title() -> str:
+    """The title of the window that has focus, or '' if it cannot be read."""
+    try:
+        import pygetwindow
+        window = pygetwindow.getActiveWindow()
+        return (window.title if window else "") or ""
+    except Exception:
+        return ""
+
+
+def _looks_like_browser(title: str) -> bool:
+    lowered = title.lower()
+    return any(
+        name in lowered
+        for name in ("chrome", "edge", "firefox", "brave", "opera", "chromium")
+    )
+
+
+def type_text(text: str, submit: bool = False, newline: bool = False) -> bool:
+    """
+    Type text into whatever has focus.
+
+    `keyboard.write` is preferred over pyautogui because it handles
+    characters outside ASCII properly - names, currency symbols and
+    punctuation that a voice command can easily contain.
+
+    submit  press Enter afterwards (send the message, run the search)
+    newline press Shift+Enter instead, for a line break inside a message
+    """
+    if not text:
+        speak("There is nothing to type.")
+        return False
+
+    where = active_window_title()
+    speak(f"Typing into {where.split(' - ')[-1] or 'the active window'}")
+
+    try:
+        keyboard.write(text, delay=0.01)
+    except Exception:
+        try:
+            # pyautogui drops non-ASCII silently, so it is the fallback
+            # rather than the first choice.
+            pyautogui.typewrite(text, interval=0.01)
+        except Exception as e:
+            speak("I could not type that.")
+            print(f"Typing failed: {type(e).__name__}: {e}")
+            return False
+
+    if newline:
+        pyautogui.hotkey("shift", "enter")
+    elif submit:
+        pyautogui.press("enter")
+
+    return True
+
+
+def clear_field() -> bool:
+    """Select everything in the focused field and delete it."""
+    try:
+        pyautogui.hotkey("ctrl", "a")
+        pyautogui.press("delete")
+        speak("Cleared.")
+        return True
+    except Exception as e:
+        print(f"Could not clear the field: {type(e).__name__}: {e}")
+        speak("I could not clear that.")
+        return False
+
+
+# =============== CLOSING A NAMED WINDOW ===============
+#
+# "close window" sends Alt+F4 to whatever has focus, which is right when the
+# user means "this one" and wrong whenever they name something. Someone who
+# cannot click cannot bring a window to the front first, so naming it has to
+# work - otherwise the only closable window is the one already in front.
+
+def list_open_windows() -> list[str]:
+    """Titles of every visible top-level window."""
+    try:
+        import pygetwindow
+    except ImportError:
+        return []
+
+    titles = []
+    for window in pygetwindow.getAllWindows():
+        title = (window.title or "").strip()
+        # Windows keeps a number of zero-sized and untitled shell windows
+        # around; none of them is something a person means.
+        if title and window.width > 0 and window.height > 0:
+            titles.append(title)
+    return titles
+
+
+def _match_windows(name: str):
+    """Windows whose title matches `name`, best first."""
+    try:
+        import pygetwindow
+    except ImportError:
+        return []
+
+    wanted = name.lower().strip()
+    if not wanted:
+        return []
+
+    exact, partial = [], []
+    for window in pygetwindow.getAllWindows():
+        title = (window.title or "").strip()
+        if not title or window.width <= 0 or window.height <= 0:
+            continue
+        lowered = title.lower()
+        if lowered == wanted:
+            exact.append(window)
+        elif wanted in lowered:
+            partial.append(window)
+        else:
+            # Window titles are usually "Document - Application", so the
+            # application name is the last segment. "close word" should
+            # find "Report.docx - Word".
+            tail = lowered.replace("—", "-").split(" - ")[-1].strip()
+            if tail.startswith(wanted) or wanted in tail.split():
+                partial.append(window)
+
+    return exact + partial
+
+
+def close_named_window(name: str) -> bool:
+    """
+    Close the window the user named. True if one was closed.
+
+    Sends the window a close request rather than killing its process, so an
+    application with unsaved work still gets to ask about it. Killing would
+    be more certain and is not ours to decide.
+    """
+    if not name:
+        speak("Which window should I close?")
+        return False
+
+    matches = _match_windows(name)
+
+    if not matches:
+        titles = list_open_windows()
+        speak(f"I cannot find a window called {name}.")
+        if titles:
+            print("Open windows:")
+            for title in titles[:15]:
+                print(f"  - {title}")
+        return False
+
+    if len(matches) > 1:
+        # Several match, so say what they are rather than guessing. Closing
+        # the wrong window can lose work, and the user cannot see which one
+        # went.
+        speak(f"There are {len(matches)} windows matching {name}.")
+        for window in matches[:5]:
+            speak(window.title)
+        return False
+
+    window = matches[0]
+    title = window.title
+    try:
+        window.close()
+        speak(f"Closed {title}")
+        return True
+    except Exception as e:
+        print(f"Could not close '{title}': {type(e).__name__}: {e}")
+        speak(f"I could not close {title}.")
+        return False
+
+
+def say_open_windows() -> list[str]:
+    """Read out what is open, so a window can be named to close it."""
+    titles = list_open_windows()
+    if not titles:
+        speak("I cannot see any open windows.")
+        return []
+
+    speak(f"There are {len(titles)} windows open.")
+    for title in titles[:10]:
+        speak(title)
+    return titles

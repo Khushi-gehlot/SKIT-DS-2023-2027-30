@@ -87,6 +87,33 @@ _BROWSER_OPEN = re.compile(
 _BROWSER_HINT = re.compile(r"\b(?:in|using|with)\s+(?:the\s+)?browser\b", re.IGNORECASE)
 
 
+# "close notepad", "close the word document", "quit spotify".
+#
+# Deliberately excludes the words that already mean something else: "close
+# window" is Alt+F4 on the focused window and "close browser" shuts down the
+# controlled session, both of which are listed verbatim in command_map and
+# are matched before this rule is reached.
+_CLOSE_NAMED = re.compile(
+    r"^(?:please\s+)?(?:close|quit|exit|shut)\s+(?:down\s+)?(?:the\s+)?"
+    r"(?P<app>[\w .+-]{2,40}?)"
+    r"(?:\s+(?:window|app|application|program|tab|for me|please|now))?$",
+    re.IGNORECASE,
+)
+
+_CLOSE_RESERVED = {
+    "window", "windows", "this", "that", "it", "everything", "all",
+    "browser", "tab", "current window", "this window", "the window",
+    # The machine itself. "shut down the computer" is a power command, and
+    # routing it here would quietly look for a window called "computer" and
+    # report that it could not find one - the worst possible outcome for a
+    # sensitive action, because it neither does the thing nor says it did
+    # not understand.
+    "computer", "my computer", "the computer", "pc", "my pc", "laptop",
+    "my laptop", "system", "the system", "machine", "the machine",
+    "everything down", "down",
+}
+
+
 _ORDINAL_VALUES = {
     "first": 1, "1st": 1, "one": 1,
     "second": 2, "2nd": 2, "two": 2,
@@ -186,11 +213,11 @@ _PRESS_BUTTON = re.compile(
 # "type github in the search box", "enter my email in the email field",
 # "search for cats and press enter", "type hello"
 _TYPE_INTO = re.compile(
-    r"\b(?:type|enter|write|fill in|put)\b\s+(?:in\s+)?"
+    r"\b(?:type|enter|write|fill in|put|say|dictate|message)\b\s+(?:in\s+)?"
     r"(?P<value>.+?)"
     r"(?:\s+(?:in|into|in the|into the)\s+(?:the\s+)?(?P<field>[\w\s]+?)"
     r"(?:\s*(?:box|field|bar|input))?)?"
-    r"(?P<submit>\s+and\s+(?:press\s+enter|submit|search|go))?\s*$",
+    r"(?P<submit>\s+and\s+(?:press\s+enter|submit|search|go|send|send it))?\s*$",
     re.IGNORECASE,
 )
 
@@ -224,6 +251,25 @@ def _app_intent(cleaned: str, text: str, source: str) -> Intent | None:
     return Intent(
         action="open_installed_app",
         target=None,
+        params={"app": name},
+        confidence=config.CONFIDENCE_PARTIAL,
+        raw_text=text, source=source, engine=ENGINE,
+    )
+
+
+def _close_intent(cleaned: str, text: str, source: str) -> Intent | None:
+    """Match "close <something named>". None if nothing was named."""
+    match = _CLOSE_NAMED.match(cleaned)
+    if not match:
+        return None
+
+    name = match.group("app").strip()
+    if not name or name in _CLOSE_RESERVED:
+        return None
+
+    return Intent(
+        action="close_app",
+        target=name,
         params={"app": name},
         confidence=config.CONFIDENCE_PARTIAL,
         raw_text=text, source=source, engine=ENGINE,
@@ -277,9 +323,17 @@ def _browser_intent(cleaned: str, text: str, source: str) -> Intent | None:
             )
 
     # "type github in the search box"
-    match = _TYPE_INTO.match(cleaned)
+    # search, not match: the verb is rarely the first word. People say
+    # "just type hello", and with a wake-word model the name is not
+    # stripped from the transcript, so "jarvis type hello" arrives intact.
+    # Anchoring to the start rejected both.
+    match = _TYPE_INTO.search(cleaned)
     if match and match.group("value"):
-        value = match.group("value").strip()
+        # Dictation keeps the capitalisation the recogniser produced.
+        # Matching runs on lowercased text, which is right for spotting the
+        # command and wrong for the words being typed - a message sent
+        # entirely in lower case is visibly wrong to whoever receives it.
+        value = _original_case(_TYPE_INTO, text, match.group("value"))
         field = (match.group("field") or "").strip() or None
         if field in ("", "the", "a"):
             field = None
@@ -397,6 +451,14 @@ def get_intent(text: str, source: str = "text") -> Intent:
     app = _app_intent(cleaned, text, source)
     if app is not None:
         return app
+
+    # --- 2c. "close <a named window>" ---
+    # After the exact dictionary so "close window" and "close browser" keep
+    # their own meanings, and before the substring scan so "close notepad"
+    # is not swallowed by the word "close" inside a shorter phrase.
+    closing = _close_intent(cleaned, text, source)
+    if closing is not None:
+        return closing
 
     # --- 3. substring match, longest phrase first ---
     for phrase in phrases():

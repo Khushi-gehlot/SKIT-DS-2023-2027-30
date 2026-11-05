@@ -65,9 +65,16 @@ def handle_audio(
 def _authorise_and_execute(intent: Intent, audio=None) -> ExecutionResult:
     """Gate the intent, then run it. The only place auth and execution meet."""
     if not intent.is_understood():
-        return ExecutionResult.fail(
-            f"I do not recognise that command: {intent.raw_text}", intent
-        )
+        # Nothing in the words placed it. If a browser is open, the answer
+        # may be on the screen rather than in the sentence - "open the one
+        # about pricing" is meaningless in isolation and obvious to anyone
+        # looking at the page. So show the model the page and ask again.
+        rescued = _resolve_against_page(intent)
+        if rescued is None:
+            return ExecutionResult.fail(
+                f"I do not recognise that command: {intent.raw_text}", intent
+            )
+        intent = rescued
 
     # Understood, but not firmly enough to act on. Hand it back for the
     # caller to confirm rather than running it.
@@ -88,6 +95,23 @@ def _authorise_and_execute(intent: Intent, audio=None) -> ExecutionResult:
         )
 
     return executor.execute(intent)
+
+
+def _resolve_against_page(intent: Intent) -> Intent | None:
+    """
+    Second attempt at an unplaceable command, using the live page.
+
+    Imported here rather than at module scope so that nothing in the
+    pipeline depends on a browser being installed; if the module or the
+    model is missing, this quietly returns None and the caller reports the
+    original failure.
+    """
+    try:
+        import page_aware
+        return page_aware.resolve(intent.raw_text, source=intent.source)
+    except Exception as e:
+        print(f"Page-aware resolution unavailable ({type(e).__name__}).")
+        return None
 
 
 def describe_intent(intent: Intent) -> str:

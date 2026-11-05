@@ -307,9 +307,21 @@ CONFIDENCE_PARTIAL = 0.8    # a known phrase appears inside a longer sentence
 USE_LLM_INTENT = os.environ.get("VYAS_USE_LLM", "1").lower() in ("1", "true", "yes")
 
 # Try the keyword matcher first and skip the LLM when it finds an exact phrase.
-# "open notepad" does not need a model, and not paying latency on the common
-# case is the difference between the assistant feeling instant and feeling slow.
-KEYWORD_FAST_PATH = True
+#
+# Off. The fast path saves a round trip on phrases that are already written
+# down, but it only fires on an *exact* match, so every natural variation -
+# "just type hello", "jarvis, open the second one" - fell through to regex
+# rules that had to anticipate the wording. Adding a rule per phrasing does
+# not scale, and each one is a new way to be wrong.
+#
+# Sending everything to the model costs latency on commands that would have
+# been instant, and that is a real cost. It buys understanding of phrasings
+# nobody wrote down, which is the whole reason the model is here. The
+# keyword matcher remains the fallback, so losing the network narrows the
+# vocabulary rather than stopping the assistant.
+KEYWORD_FAST_PATH = os.environ.get("VYAS_KEYWORD_FAST_PATH", "0").lower() in (
+    "1", "true", "yes"
+)
 
 
 # =============== LLM INTENT ENGINE ===============
@@ -333,8 +345,51 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 # Hugging Face: free, but idle models cold-start, which can mean a 20-30
 # second wait on the first request.
 HF_API_KEY = os.environ.get("HF_API_KEY", "").strip()
-HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
-HF_MODEL = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+# The Inference Providers router. Override with your own endpoint URL in
+# .env if you deploy a dedicated Inference Endpoint instead.
+HF_API_URL = os.environ.get(
+    "HF_API_URL", "https://router.huggingface.co/v1/chat/completions"
+)
+
+# DeepSeek-R1 reasons out loud before answering. The client strips the
+# <think> block and allows a larger token budget for it - see
+# LLM_REASONING_MAX_TOKENS. Expect it to be slower than a plain instruct
+# model, because most of what it generates is deliberation rather than
+# answer.
+HF_MODEL = os.environ.get("HF_MODEL", "deepseek-ai/DeepSeek-R1")
+
+# Google Gemini: free, no card, and exposed through an OpenAI-compatible
+# endpoint so it needs no special client. Daily and per-minute quotas apply
+# and Google no longer publishes exact free-tier figures - check the quota
+# page in AI Studio for this project's own limits.
+#     https://aistudio.google.com/apikey
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_API_URL = os.environ.get(
+    "GEMINI_API_URL",
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Ollama: a model running on this machine. No key, no quota, no network, and
+# nothing to expire - which is why it sits last in the chain as the provider
+# that is still there when every hosted free tier has run out. It is also
+# the only option that keeps command text on the user's own computer.
+#     https://ollama.com/download  then:  ollama pull llama3.2:3b
+OLLAMA_ENABLED = os.environ.get("VYAS_OLLAMA", "0").lower() in ("1", "true", "yes")
+OLLAMA_API_URL = os.environ.get(
+    "OLLAMA_API_URL", "http://localhost:11434/v1/chat/completions"
+)
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+
+# When a command cannot be placed from its words alone and a browser is
+# open, show the model the page's links and fields and ask again.
+#
+# "open the one about pricing" carries no information about which link that
+# is - the answer is on the screen. Only reached after the ordinary engine
+# has given up, so it costs nothing on commands that already work.
+PAGE_AWARE_INTENT = os.environ.get("VYAS_PAGE_AWARE", "1").lower() in (
+    "1", "true", "yes"
+)
 
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "").strip()
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
@@ -350,6 +405,21 @@ LLM_TIMEOUT = float(os.environ.get("VYAS_LLM_TIMEOUT", "8"))
 # Deterministic output. This is classification, so creativity is a defect.
 LLM_TEMPERATURE = 0.0
 LLM_MAX_TOKENS = 200
+
+# Reasoning models (DeepSeek-R1 and similar) emit their deliberation before
+# the answer, inside a <think> block the client strips. That thinking comes
+# out of the same budget, so the ordinary 200 would truncate the reply
+# before any JSON appeared.
+LLM_REASONING_MAX_TOKENS = int(os.environ.get("VYAS_LLM_REASONING_TOKENS", "1200"))
+
+# And they need longer to answer, for the same reason.
+LLM_REASONING_TIMEOUT = float(os.environ.get("VYAS_LLM_REASONING_TIMEOUT", "40"))
+
+# Which provider to try first, by name: groq, gemini, mistral, huggingface
+# or ollama. Unset means the order written in nlu/llm.py. Set this to pin a
+# particular provider without removing the others, so the rest stay as
+# fallbacks when it is rate-limited or down.
+LLM_PROVIDER = os.environ.get("VYAS_LLM_PROVIDER", "").strip().lower()
 
 # Below this the LLM's answer is discarded in favour of the keyword matcher.
 LLM_MIN_CONFIDENCE = 0.5
