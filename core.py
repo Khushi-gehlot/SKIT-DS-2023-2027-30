@@ -40,10 +40,26 @@ except ImportError:
 
 # =============== TEXT TO SPEECH ===============
 
+# Only one thing may be spoken at a time.
+#
+# pyttsx3 drives a single SAPI voice, and two engines running at once fail
+# with "run loop already started" - which loses the sentence entirely. That
+# happens in normal use: the browser worker says "Looking for channel" while
+# the conversation thread is still speaking the previous result. Losing
+# speech matters more here than almost anywhere, because for a user who is
+# not watching the screen it is the only feedback there is.
+_speech_lock = threading.Lock()
+
+
 def speak(text: str):
     """Speak text out loud and also print it (safe for multi-threaded use)."""
     print("Assistant:", text)
+    with _speech_lock:
+        _speak_now(text)
 
+
+def _speak_now(text: str):
+    """Say one thing. Only ever called with the speech lock held."""
     # Streamlit runs scripts in a worker thread and the always-on loop has its
     # own; without this pyttsx3 fails with 'CoInitialize has not been called'.
     if pythoncom is not None:
@@ -53,7 +69,9 @@ def speak(text: str):
             pass
 
     try:
-        # A new engine per call avoids pyttsx3's 'run loop already started'.
+        # A fresh engine per call. pyttsx3 cannot be re-entered, and reusing
+        # one across calls leaves its run loop in a state the next call
+        # cannot start from.
         engine = pyttsx3.init()
         engine.say(text)
         engine.runAndWait()

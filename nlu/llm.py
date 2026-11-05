@@ -53,18 +53,47 @@ ENGINE = "llm"
 
 PROVIDERS = [
     ("groq", lambda: (config.GROQ_API_KEY, config.GROQ_API_URL, config.GROQ_MODEL)),
+    ("gemini", lambda: (config.GEMINI_API_KEY, config.GEMINI_API_URL, config.GEMINI_MODEL)),
     ("mistral", lambda: (config.MISTRAL_API_KEY, config.MISTRAL_API_URL, config.MISTRAL_MODEL)),
     ("huggingface", lambda: (config.HF_API_KEY, config.HF_API_URL, config.HF_MODEL)),
+    # Last because it is the slowest, and first choice for nobody with a
+    # working key - but it is the only entry with no quota and no network,
+    # so it is what remains when every hosted tier is exhausted. The key is
+    # a placeholder: a local server does not authenticate.
+    ("ollama", lambda: (
+        "local" if config.OLLAMA_ENABLED else "",
+        config.OLLAMA_API_URL, config.OLLAMA_MODEL,
+    )),
 ]
+
+
+def configured_providers() -> list[tuple[str, str, str, str]]:
+    """
+    Every provider that has a key, in order of preference.
+
+    A list rather than a single choice because free tiers run out. Holding
+    only the first configured provider meant a rate limit dropped the
+    assistant straight to keyword matching while a second, perfectly usable
+    provider sat unused.
+    """
+    found = []
+    for name, resolve in PROVIDERS:
+        key, url, model = resolve()
+        if key:
+            found.append((name, key, url, model))
+
+    # A pinned provider moves to the front rather than replacing the list,
+    # so choosing one does not give up the fallbacks behind it.
+    if config.LLM_PROVIDER:
+        found.sort(key=lambda p: p[0] != config.LLM_PROVIDER)
+
+    return found
 
 
 def active_provider() -> tuple[str, str, str, str] | None:
     """(name, key, url, model) for the first configured provider, or None."""
-    for name, resolve in PROVIDERS:
-        key, url, model = resolve()
-        if key:
-            return name, key, url, model
-    return None
+    providers = configured_providers()
+    return providers[0] if providers else None
 
 
 def is_available() -> bool:
@@ -90,7 +119,64 @@ AVAILABLE = is_available()
 # user said or when.
 _MODEL_FIELDS = {"action", "target", "params", "confidence"}
 
-_VALID_ACTIONS = set(ACTIONS)
+def valid_actions() -> set[str]:
+    """
+    Every action a reply may name.
+
+    The union of the phrase table and what the executor can actually run.
+    command_map alone is not enough: dictation, form filling and closing a
+    named window are reached through the matcher's rules and appear in no
+    fixed phrase, so validating against the table rejected the model's
+    answer for capabilities the system genuinely has.
+
+    Imported lazily to keep nlu free of a hard dependency on the executor.
+    """
+    actions = set(ACTIONS)
+    try:
+        import executor
+        actions |= set(executor.registered_actions())
+    except Exception:
+        pass
+    return actions
+
+
+# Reasoning models think out loud before answering, in a tagged block that
+# is not part of the reply. DeepSeek-R1 and its distils use <think>; other
+# families use slightly different tags, so all the common ones are stripped.
+_REASONING_BLOCK = re.compile(
+    r"<(think|thinking|reasoning)>.*?</\1>", re.DOTALL | re.IGNORECASE
+)
+
+# A truncated reply can leave the opening tag with no closing one, in which
+# case everything after it is reasoning that never finished.
+_UNCLOSED_REASONING = re.compile(
+    r"<(think|thinking|reasoning)>.*$", re.DOTALL | re.IGNORECASE
+)
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Whether this model thinks out loud before answering."""
+    lowered = (model or "").lower()
+    return any(
+        marker in lowered
+        for marker in ("r1", "reason", "-think", "qwq", "o1", "o3", "deepseek-v3.1")
+    )
+
+
+def strip_reasoning(text: str) -> str:
+    """
+    Remove a reasoning model's visible thinking from its reply.
+
+    Without this, a DeepSeek-R1 response is several paragraphs of
+    deliberation followed by the JSON, and the parser - which looks for the
+    first {...} it can find - picks up a brace from inside the reasoning
+    instead of the answer.
+    """
+    if not text:
+        return text
+    cleaned = _REASONING_BLOCK.sub("", text)
+    cleaned = _UNCLOSED_REASONING.sub("", cleaned)
+    return cleaned.strip()
 
 
 def extract_json(text: str) -> dict | None:
@@ -105,7 +191,7 @@ def _extract_json(text: str) -> dict | None:
     Models wrap JSON in markdown fences or add a sentence of commentary often
     enough that handling it is cheaper than retrying.
     """
-    text = text.strip()
+    text = strip_reasoning(text).strip()
 
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if fenced:
@@ -145,10 +231,34 @@ def ask(system: str, user: str, json_mode: bool = True,
     anyway, which makes the guarantee a convenience rather than a
     requirement.
     """
-    found = active_provider()
-    if found is None:
+    providers = configured_providers()
+    if not providers:
         return None
-    name, key, url, model = found
+
+    # Try each configured provider in turn. Only conditions that another
+    # provider could survive are worth moving on for - a rate limit, an
+    # outage, a model this account cannot see. A malformed prompt would
+    # fail everywhere, so it is not retried.
+    for position, provider in enumerate(providers):
+        answer, retryable = _ask_one(provider, system, user, json_mode, max_tokens)
+        if answer is not None:
+            return answer
+        if not retryable:
+            return None
+        if position + 1 < len(providers):
+            print(f"  trying {providers[position + 1][0]} instead.")
+    return None
+
+
+def _ask_one(provider, system: str, user: str, json_mode: bool,
+             max_tokens: int | None) -> tuple[str | None, bool]:
+    """
+    One request to one provider.
+
+    Returns (answer, retryable). `retryable` says whether a different
+    provider might succeed where this one did not.
+    """
+    name, key, url, model = provider
 
     body = {
         "model": model,
@@ -157,7 +267,14 @@ def ask(system: str, user: str, json_mode: bool = True,
             {"role": "user", "content": user},
         ],
         "temperature": config.LLM_TEMPERATURE,
-        "max_tokens": max_tokens or config.LLM_MAX_TOKENS,
+        # Reasoning models spend most of their output thinking before they
+        # answer. The ordinary budget is sized for a one-line JSON object,
+        # so a reasoning model would be cut off mid-deliberation and return
+        # nothing usable at all.
+        "max_tokens": max_tokens or (
+            config.LLM_REASONING_MAX_TOKENS if _is_reasoning_model(model)
+            else config.LLM_MAX_TOKENS
+        ),
     }
     if json_mode:
         body["response_format"] = {"type": "json_object"}
@@ -170,46 +287,58 @@ def ask(system: str, user: str, json_mode: bool = True,
                 "Content-Type": "application/json",
             },
             json=body,
-            timeout=config.LLM_TIMEOUT,
+            # Reasoning models need far longer than the budget set for a
+            # one-line classification: the deliberation is generated token
+            # by token before the answer starts.
+            timeout=(
+                config.LLM_REASONING_TIMEOUT if _is_reasoning_model(model)
+                else config.LLM_TIMEOUT
+            ),
         )
     except requests.exceptions.Timeout:
-        print(f"{name} timed out after {config.LLM_TIMEOUT}s; falling back to keywords.")
-        return None
+        limit = (
+            config.LLM_REASONING_TIMEOUT if _is_reasoning_model(model)
+            else config.LLM_TIMEOUT
+        )
+        print(f"{name} timed out after {limit}s.")
+        return None, True
     except requests.exceptions.RequestException as e:
-        print(f"{name} unreachable ({type(e).__name__}); falling back to keywords.")
-        return None
+        print(f"{name} unreachable ({type(e).__name__}).")
+        return None, True
 
     if response.status_code == 401:
         print(f"{name} rejected the API key. Check your .env.")
-        return None
+        return None, True
     if response.status_code == 404:
         print(f"{name} does not offer model '{model}'. Set a different one in .env.")
-        return None
+        return None, True
     if response.status_code == 429:
-        print(f"{name} rate limit reached; falling back to keywords.")
-        return None
+        print(f"{name} rate limit reached.")
+        return None, True
     if response.status_code == 503:
         # Hugging Face parks idle models and wakes them on demand.
-        print(f"{name} model is still loading; falling back to keywords.")
-        return None
+        print(f"{name} model is still loading.")
+        return None, True
     if response.status_code == 400 and json_mode:
-        # Some prompts make strict JSON mode fail. Ask again without it and
-        # lean on the lenient parser instead of losing the answer.
+        # Some prompts make strict JSON mode fail. Ask the same provider
+        # again without it and lean on the lenient parser instead of losing
+        # the answer. Not a reason to move on - the next provider would
+        # most likely reject it too.
         print(f"{name} rejected JSON mode; retrying without it.")
-        return ask(system, user, json_mode=False, max_tokens=max_tokens)
+        return _ask_one(provider, system, user, False, max_tokens)
 
     if not response.ok:
         print(
             f"{name} returned HTTP {response.status_code}: "
-            f"{response.text[:120]}; falling back to keywords."
+            f"{response.text[:120]}"
         )
-        return None
+        return None, True
 
     try:
-        return response.json()["choices"][0]["message"]["content"]
+        return response.json()["choices"][0]["message"]["content"], False
     except (KeyError, IndexError, ValueError) as e:
         print(f"Unexpected response shape from {name} ({type(e).__name__}).")
-        return None
+        return None, True
 
 
 def get_intent(text: str, source: str = "text") -> Intent:
@@ -246,7 +375,7 @@ def get_intent(text: str, source: str = "text") -> Intent:
         except ValueError:
             payload["confidence"] = 0.0
 
-    intent, errors = try_parse(payload, known_actions=_VALID_ACTIONS)
+    intent, errors = try_parse(payload, known_actions=valid_actions())
     if errors:
         # Most often an invented action. Falling back beats acting on it.
         print(f"LLM output failed the intent contract: {'; '.join(errors)}")

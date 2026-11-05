@@ -34,9 +34,17 @@ _PARAMS = {
     "browser_click": 'with target "index": "ordinal" = a position such as '
                      '"second", "last" or "3". With target "text": "text" = '
                      'the link wording the user said.',
-    "browser_type": '"value" = the text to type, required. "field" = which box '
-                    '(e.g. "search", "email"), or null if unstated. "submit" = '
-                    'true if the user also wants Enter pressed.',
+    "browser_type": '"value" = the text to type, required, with the user\'s own '
+                    'capitalisation kept. "field" = which box (e.g. "search", '
+                    '"email"), or null if unstated. "submit" = true if the user '
+                    'also wants Enter pressed, which includes "and send", "and '
+                    'search" and "and go". "newline" = true for a line break '
+                    'instead of sending.',
+    "browser_fill": '"index" = which numbered field, as an integer, required. '
+                    '"value" = what to put in it.',
+    "browser_button": '"button" = the wording on the button, or null to press '
+                      'the form\'s submit button.',
+    "close_app": '"app" = the name of the window or program to close.',
 }
 
 _NOTES = {
@@ -50,6 +58,28 @@ _NOTES = {
                     'reading it back.',
     "browser_scroll": 'scrolls the web page. Use the plain "scroll" action '
                       'instead when no browser is involved.',
+    "browser_type": 'this is dictation and works anywhere, not only in a '
+                    'browser - Notepad, a chat message box, a search bar. Use '
+                    'it whenever the user wants words entered somewhere. The '
+                    'verb is often buried mid-sentence ("just type hello", '
+                    '"jarvis, write this down"), and the wake word may still '
+                    'be in the text; ignore it.',
+    "browser_fields": 'reads out what can be filled in on the current page. '
+                      'Use it for "what can I fill in", "read the form", or '
+                      'when the user wants help with a form but has not said '
+                      'which box.',
+    "browser_button": 'presses a button on the page, which is different from '
+                      'clicking a link. Use it for submit, next, continue, '
+                      'save, sign in.',
+    "type_clear": 'empties the text box that currently has the cursor, for '
+                  'when dictation came out wrong.',
+    "close_app": 'closes a window the user names, wherever it is - "close '
+                 'notepad", "quit spotify". Use the plain "window" action '
+                 'with target "close" when they mean the one in front and '
+                 'name nothing. Never use this for the computer itself; '
+                 'shutting the machine down is the "power" action.',
+    "list_windows": 'reads out which windows are open, so the user can name '
+                    'one.',
 }
 
 
@@ -59,6 +89,23 @@ def capability_catalogue() -> str:
     by_action: dict[str, set[str | None]] = defaultdict(set)
     for action, target in COMMANDS.values():
         by_action[action].add(target)
+
+    # Also list every action the executor can actually run.
+    #
+    # command_map holds the fixed phrases, but several capabilities are
+    # reached only through the matcher's rules - dictation, filling a form
+    # field, closing a named window - and so appear nowhere in it. Building
+    # the catalogue from the phrase table alone left those invisible to the
+    # model, which then answered "unknown" to every request for them. It was
+    # right to: it had not been told they existed.
+    try:
+        import executor
+        for action in executor.registered_actions():
+            by_action.setdefault(action, set())
+    except Exception:
+        # The prompt is still usable without this; it just will not mention
+        # the rule-only actions.
+        pass
 
     lines = []
     for action in sorted(by_action):

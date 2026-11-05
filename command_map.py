@@ -234,6 +234,12 @@ COMMANDS: dict[str, tuple[str, str | None]] = {
 
     "show desktop": ("window", "show_desktop"),
 
+    "what is open": ("list_windows", None),
+    "what windows are open": ("list_windows", None),
+    "list windows": ("list_windows", None),
+    "list open windows": ("list_windows", None),
+    "show open windows": ("list_windows", None),
+
     "switch window": ("window", "switch"),
     "next window": ("window", "switch"),
     "change window": ("window", "switch"),
@@ -347,6 +353,19 @@ COMMANDS: dict[str, tuple[str, str | None]] = {
 
     "press enter": ("browser_submit", None),
     "hit enter": ("browser_submit", None),
+
+    # ===================== DICTATION =====================
+    #
+    # Typing goes wherever the keyboard focus already is, so these work in
+    # Notepad, a message box or a search bar without the assistant needing
+    # to know which application it is.
+
+    "clear the field": ("type_clear", None),
+    "clear field": ("type_clear", None),
+    "clear the box": ("type_clear", None),
+    "clear that": ("type_clear", None),
+    "delete all of it": ("type_clear", None),
+    "start again": ("type_clear", None),
 
     # ===================== FORMS =====================
     #
