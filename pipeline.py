@@ -82,6 +82,7 @@ def describe() -> dict:
     return {
         "stt": "google",
         "nlu": "llm + keyword fallback" if engines["llm"] else "keyword only",
+        "llm_provider": engines["llm_provider"],
         "llm_model": engines["llm_model"],
         "llm_ready": engines["llm"],
         "auth": "enabled" if config.REQUIRE_SPEAKER_VERIFICATION else "disabled",

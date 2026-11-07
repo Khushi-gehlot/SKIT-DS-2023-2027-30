@@ -35,7 +35,9 @@ MIC_INDEX: int | None = int(_mic) if _mic and _mic.isdigit() else None
 
 LISTEN_TIMEOUT = 8          # seconds to wait for speech to start
 PHRASE_TIME_LIMIT = 8       # maximum length of a single utterance
-PAUSE_THRESHOLD = 0.8       # silence that marks the end of a phrase
+PAUSE_THRESHOLD = 1.2       # silence that marks the end of a phrase
+# 0.8 was too eager: a natural beat between "hello" and the name ended the
+# utterance, so the recogniser only ever heard "hello".
 CALIBRATION_SECONDS = 1.0   # ambient-noise sampling on first listen
 
 # A dead or muted device calibrates to ~0, which would make the recogniser
@@ -81,21 +83,34 @@ WHISPER_HALLUCINATIONS = {
 
 # =============== WAKE WORD ===============
 #
-# Speech-to-text rarely returns "vyas" verbatim - Google transcribes it as
-# "guys", "wise", "bias" and so on depending on accent and microphone. Matching
-# only the literal spelling meant the wake word almost never fired, so a
-# greeting followed by any plausible rendering of the name is accepted.
+# The wake name is "nova": two syllables, open vowels, no consonant clusters,
+# and a common English word that recognisers already have a strong prior for.
+# It also shares no sounds with any command in command_map, so it cannot be
+# confused with "scroll", "close" or "go".
+#
+# This matters more than it sounds. "vyas" was transcribed as "guys" by both
+# Google and Whisper essentially every time, so the wake word almost never
+# matched and the assistant appeared deaf.
+#
+# Speech-to-text still rarely returns a name verbatim, so a greeting followed
+# by any plausible rendering of the name is accepted.
 
 GREETINGS = ["hello", "hey", "hi", "ok", "okay", "yo"]
 
 NAME_VARIANTS = [
-    "vyas", "vyaas", "vias", "viyas", "byas", "wyas",
-    "guys", "gas", "grass",          # what the recogniser usually hears
-    "wise", "vice", "voice", "bias", "boys", "views",
-    "bhai", "bai", "by", "buy", "bye",
+    # the name and its spelling variants
+    "nova", "novah", "nova.",
+    # near-misses recognisers produce for it
+    "nover", "nowa", "noba", "nava", "no va", "nova,", "nobo", "knowva",
+    # kept so the earlier wake words still work for anyone used to them
+    "coco", "cocoa", "vyas", "vias", "guys", "bhai",
 ]
 
 WAKE_WORDS = [f"{g} {n}" for g in GREETINGS for n in NAME_VARIANTS]
+
+# "nova" on its own wakes it, no greeting needed - one word beats two for a
+# user who finds speaking effortful.
+WAKE_WORDS += ["nova", "novah", "nover", "no va", "nowa", "coco"]
 
 SLEEP_WORDS = [
     "sleep", "go to sleep", "stop listening", "goodbye", "good night",
@@ -127,6 +142,24 @@ KEYWORD_FAST_PATH = True
 # Mistral's free tier is enough for this: small models, generous limits, and no
 # card required. Get a key at https://console.mistral.ai and put it in .env as
 #     MISTRAL_API_KEY=...
+
+# Several providers are supported; the first with a key is used, in the
+# order listed in nlu/llm.py. They all speak the OpenAI-compatible
+# /chat/completions shape, so supporting more than one costs almost nothing.
+
+# Groq: free, no card, no phone verification, and fast enough that the user
+# does not notice the round trip. Preferred.
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Model availability varies by account. List yours with:
+#     GET https://api.groq.com/openai/v1/models
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+
+# Hugging Face: free, but idle models cold-start, which can mean a 20-30
+# second wait on the first request.
+HF_API_KEY = os.environ.get("HF_API_KEY", "").strip()
+HF_API_URL = "https://router.huggingface.co/v1/chat/completions"
+HF_MODEL = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
 
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "").strip()
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"

@@ -1,6 +1,6 @@
 # streamlit_app.py
 """
-VyasOS Voice Assistant — single-process Streamlit app.
+Nova Voice Assistant — single-process Streamlit app.
 
 There is no web server and no HTTP layer. This app imports the command router
 directly and calls the automation functions in-process, so the whole assistant
@@ -145,12 +145,12 @@ def log(heard: str, message: str, success: bool):
 
 def listen_once() -> tuple[bool, str, str]:
     """Wake word, then one command session. Returns (success, heard, message)."""
-    speak("Say the wake word to start.")
+    speak("Say nova to start.")
     wake = transcribe()
     if not wake:
         return False, "(nothing heard)", "I did not hear the wake word."
     if not is_wake_word(wake):
-        return False, wake, f"No wake word in '{wake}'. Say 'hello vyas' first."
+        return False, wake, f"No wake word in '{wake}'. Say 'nova' first."
 
     speak("I'm awake. Give me a command, or say sleep.")
     last = "Session ended."
@@ -173,7 +173,7 @@ def listen_once() -> tuple[bool, str, str]:
 
 # ----------------- Page -----------------
 
-st.set_page_config(page_title="VyasOS Voice Assistant", page_icon="🎙️", layout="wide")
+st.set_page_config(page_title="Nova Voice Assistant", page_icon="🎙️", layout="wide")
 
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -190,22 +190,25 @@ for ev in reversed(controller.drain()):
 
 
 with st.sidebar:
-    st.subheader("VyasOS")
+    st.subheader("Nova")
     st.success(f"{len(COMMANDS)} commands loaded")
     st.caption("Running in-process — no backend server.")
 
     _info = pipeline.describe()
     if _info["llm_ready"]:
-        st.info(f"Understanding: LLM ({_info['llm_model']}) + keyword fallback")
+        st.info(
+            f"Understanding: {_info['llm_provider']} / {_info['llm_model']} "
+            "+ keyword fallback"
+        )
     else:
         st.warning(
-            "Understanding: keyword only — set MISTRAL_API_KEY in .env to "
+            "Understanding: keyword only — set GROQ_API_KEY in .env to "
             "enable free-speech commands."
         )
 
     st.divider()
     st.subheader("Always-on wake word")
-    st.caption('Listens continuously for "hello vyas" / "hey vyas" / "hello bhai".')
+    st.caption('Listens continuously for "nova", "hello nova" or "hey nova".')
 
     running = controller.is_running()
     c1, c2 = st.columns(2)
@@ -227,7 +230,7 @@ with st.sidebar:
         st.write(", ".join(sorted(COMMANDS)))
 
 
-st.title("🎙️ VyasOS Voice Assistant")
+st.title("🎙️ Nova Voice Assistant")
 st.caption(
     "Say the wake word, then a command. Or type one — typed commands skip "
     "speech recognition and are the reliable way to demo."
