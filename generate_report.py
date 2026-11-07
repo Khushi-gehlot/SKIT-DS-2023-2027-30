@@ -40,7 +40,7 @@ def get_repo_info():
     return repo_name, branch_name
 
 
-def get_git_metrics(interval="weekly", weeks_ago=0):
+def get_git_metrics(interval="weekly"):
     """
     Parses Git commit logs.
     Supported intervals: 'weekly', 'monthly', 'final'
@@ -49,14 +49,9 @@ def get_git_metrics(interval="weekly", weeks_ago=0):
     git_args = ['git', 'log', '--no-merges', '--pretty=format:COMMIT|||%h|||%an|||%ad|||%s', '--date=short', '--numstat']
 
     if interval == "weekly":
-    end_date = today - datetime.timedelta(days=7 * weeks_ago)
-    start_date = end_date - datetime.timedelta(days=7)
-    git_args.append(f"--since={start_date.strftime('%Y-%m-%d')}")
-    if weeks_ago > 0:
-        git_args.append(f"--until={end_date.strftime('%Y-%m-%d')}")
-        scope_title = f"{start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} (Week -{weeks_ago})"
-     else:
-        scope_title = f"Last 7 Days (Since {start_date.strftime('%Y-%m-%d')})"
+        since_date = (today - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+        git_args.append(f"--since={since_date}")
+        scope_title = f"Last 7 Days (Since {since_date})"
     elif interval == "monthly":
         since_date = (today - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
         git_args.append(f"--since={since_date}")
@@ -164,14 +159,14 @@ def create_charts(students, timeline_activity, interval):
     return Image(img_buffer, width=500, height=170)
 
 
-def generate_pdf(interval="weekly", weeks_ago=0):
+def generate_pdf(interval="weekly"):
     repo_name, branch_name = get_repo_info()
-    students, timeline_activity, student_logs, scope_title = get_git_metrics(interval, weeks_ago)
+    students, timeline_activity, student_logs, scope_title = get_git_metrics(interval)
 
     if students is None:
         return
 
-    date_stamp = (datetime.date.today() - datetime.timedelta(days=7 * weeks_ago)).strftime("%Y-%m-%d")
+    date_stamp = datetime.date.today().strftime("%Y-%m-%d")
 
     if interval == "weekly":
         report_title = "Weekly Progress Report (Form-3)"
@@ -392,5 +387,4 @@ def generate_pdf(interval="weekly", weeks_ago=0):
 
 if __name__ == "__main__":
     chosen_interval = sys.argv[1].lower() if len(sys.argv) > 1 else "weekly"
-    weeks_ago = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    generate_pdf(chosen_interval, weeks_ago)
+    generate_pdf(chosen_interval)
