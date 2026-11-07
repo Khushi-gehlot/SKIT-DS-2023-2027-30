@@ -46,7 +46,7 @@ class ToggleResponse(BaseModel):
 
 # ----------------- FastAPI app setup -----------------
 
-app = FastAPI(title="VyasOS Automation API", version="1.0.0")
+app = FastAPI(title="Nova Automation API", version="1.0.0")
 
 # Allow the React dev server to talk to this API
 origins = [
@@ -69,7 +69,7 @@ def always_on_loop():
     """
     Background loop (Jarvis-style):
 
-    - First waits for wake word like "hello vyas".
+    - First waits for wake word like "nova".
     - Once heard, enters an "awake" session where it listens for commands
       continuously (no need to repeat wake word).
     - Session ends only when user says a sleep word like "sleep" / "stop listening".
@@ -183,7 +183,7 @@ def listen_and_execute():
     """
     Single-shot voice mode from the UI (mic button), but with session:
 
-      1) Listen once for a wake word like 'hello vyas'.
+      1) Listen once for a wake word like 'nova'.
       2) If detected, enter a loop:
          - Listen for commands continuously.
          - Execute each command.
@@ -205,7 +205,7 @@ def listen_and_execute():
         return ListenResponse(
             success=False,
             recognized=wake_text,
-            message=f"No wake word detected in: '{wake_text}'. Say 'hello vyas' first."
+            message=f"No wake word detected in: '{wake_text}'. Say 'nova' first."
         )
 
     # STEP 2: Wake word detected → enter ACTIVE SESSION

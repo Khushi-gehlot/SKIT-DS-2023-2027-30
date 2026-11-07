@@ -1,16 +1,19 @@
 """
-LLM intent engine (Mistral).
+LLM intent engine.
 
 Turns free speech into an Intent, so the user can say "could you turn the
 sound up a bit" instead of the exact phrase "volume up". The keyword engine
 only matches phrases it already knows; this one understands requests it has
 never seen.
 
-Mistral was chosen because its free tier needs no card, the small models are
-fast enough for a voice loop, and the API is plain HTTP - no SDK, so the only
-dependency is `requests`, which the project already had.
+Several providers are supported and the first with a key configured is used.
+They all speak the OpenAI-compatible /chat/completions shape, so supporting
+more than one costs almost nothing - and it means a provider outage or a
+provisioning problem does not block the whole feature.
 
-    MISTRAL_API_KEY=...        in .env
+    GROQ_API_KEY=...       in .env    (preferred: free, fast, no card)
+    MISTRAL_API_KEY=...
+    HF_API_KEY=...
 
 No vector database. The capability catalogue is small enough to list in the
 prompt, and doing so is both lighter and more accurate than retrieval - see
@@ -41,21 +44,53 @@ except ImportError:
 
 ENGINE = "llm"
 
-# Fields the model is allowed to set. Everything else on the Intent is
-# provenance that we fill in ourselves - a model should not be telling us what
-# the user said or when.
-_MODEL_FIELDS = {"action", "target", "params", "confidence"}
 
-_VALID_ACTIONS = set(ACTIONS)
+# =============== PROVIDERS ===============
+#
+# Tried in this order; the first with a key wins. Groq is first because
+# latency is what matters for a voice assistant - the user is waiting
+# mid-sentence, and Groq answers in about a second.
+
+PROVIDERS = [
+    ("groq", lambda: (config.GROQ_API_KEY, config.GROQ_API_URL, config.GROQ_MODEL)),
+    ("mistral", lambda: (config.MISTRAL_API_KEY, config.MISTRAL_API_URL, config.MISTRAL_MODEL)),
+    ("huggingface", lambda: (config.HF_API_KEY, config.HF_API_URL, config.HF_MODEL)),
+]
+
+
+def active_provider() -> tuple[str, str, str, str] | None:
+    """(name, key, url, model) for the first configured provider, or None."""
+    for name, resolve in PROVIDERS:
+        key, url, model = resolve()
+        if key:
+            return name, key, url, model
+    return None
 
 
 def is_available() -> bool:
     """Whether the engine can actually be used right now."""
-    return bool(requests and config.MISTRAL_API_KEY)
+    return bool(requests and active_provider())
+
+
+def provider_name() -> str:
+    found = active_provider()
+    return found[0] if found else "none"
+
+
+def model_name() -> str:
+    found = active_provider()
+    return found[3] if found else "not configured"
 
 
 # Read by nlu/__init__.py to decide whether to try this engine at all.
 AVAILABLE = is_available()
+
+# Fields the model is allowed to set. Everything else on the Intent is
+# provenance we fill in ourselves - a model should not be telling us what the
+# user said or when.
+_MODEL_FIELDS = {"action", "target", "params", "confidence"}
+
+_VALID_ACTIONS = set(ACTIONS)
 
 
 def _extract_json(text: str) -> dict | None:
@@ -67,7 +102,6 @@ def _extract_json(text: str) -> dict | None:
     """
     text = text.strip()
 
-    # ```json ... ``` or ``` ... ```
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if fenced:
         text = fenced.group(1).strip()
@@ -77,7 +111,6 @@ def _extract_json(text: str) -> dict | None:
     except json.JSONDecodeError:
         pass
 
-    # Fall back to the first {...} block in the response.
     brace = re.search(r"\{.*\}", text, re.DOTALL)
     if brace:
         try:
@@ -87,17 +120,22 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-def _call_mistral(text: str) -> str | None:
+def _call_llm(text: str) -> str | None:
     """Send one classification request. Returns the raw reply, or None."""
+    found = active_provider()
+    if found is None:
+        return None
+    name, key, url, model = found
+
     try:
         response = requests.post(
-            config.MISTRAL_API_URL,
+            url,
             headers={
-                "Authorization": f"Bearer {config.MISTRAL_API_KEY}",
+                "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": config.MISTRAL_MODEL,
+                "model": model,
                 "messages": [
                     {"role": "system", "content": system_prompt()},
                     {"role": "user", "content": text},
@@ -109,26 +147,36 @@ def _call_mistral(text: str) -> str | None:
             timeout=config.LLM_TIMEOUT,
         )
     except requests.exceptions.Timeout:
-        print(f"LLM timed out after {config.LLM_TIMEOUT}s; falling back to keywords.")
+        print(f"{name} timed out after {config.LLM_TIMEOUT}s; falling back to keywords.")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"LLM unreachable ({type(e).__name__}); falling back to keywords.")
+        print(f"{name} unreachable ({type(e).__name__}); falling back to keywords.")
         return None
 
     if response.status_code == 401:
-        print("LLM rejected the API key. Check MISTRAL_API_KEY in .env.")
+        print(f"{name} rejected the API key. Check your .env.")
+        return None
+    if response.status_code == 404:
+        print(f"{name} does not offer model '{model}'. Set a different one in .env.")
         return None
     if response.status_code == 429:
-        print("LLM rate limit reached; falling back to keywords.")
+        print(f"{name} rate limit reached; falling back to keywords.")
+        return None
+    if response.status_code == 503:
+        # Hugging Face parks idle models and wakes them on demand.
+        print(f"{name} model is still loading; falling back to keywords.")
         return None
     if not response.ok:
-        print(f"LLM returned HTTP {response.status_code}; falling back to keywords.")
+        print(
+            f"{name} returned HTTP {response.status_code}: "
+            f"{response.text[:120]}; falling back to keywords."
+        )
         return None
 
     try:
         return response.json()["choices"][0]["message"]["content"]
     except (KeyError, IndexError, ValueError) as e:
-        print(f"Unexpected LLM response shape ({type(e).__name__}).")
+        print(f"Unexpected response shape from {name} ({type(e).__name__}).")
         return None
 
 
@@ -140,13 +188,13 @@ def get_intent(text: str, source: str = "text") -> Intent:
     if not is_available():
         return Intent.unknown(raw_text=text, source=source)
 
-    reply = _call_mistral(text.strip())
+    reply = _call_llm(text.strip())
     if reply is None:
         return Intent.unknown(raw_text=text, source=source)
 
     data = _extract_json(reply)
     if data is None:
-        print(f"LLM did not return JSON: {reply[:120]!r}")
+        print(f"{provider_name()} did not return JSON: {reply[:120]!r}")
         return Intent.unknown(raw_text=text, source=source)
 
     # Keep only what the model is allowed to decide, then add our own
@@ -180,5 +228,4 @@ def get_intents(text: str, source: str = "text") -> list[Intent]:
     Multi-step hook for Sprint 3: "open Chrome and search for X" is two
     intents. Single-intent for now.
     """
-    intent = get_intent(text, source)
-    return [intent]
+    return [get_intent(text, source)]

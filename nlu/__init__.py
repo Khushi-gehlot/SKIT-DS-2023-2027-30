@@ -87,5 +87,6 @@ def active_engines() -> dict[str, bool | str]:
         "keyword": True,
         "keyword_fast_path": config.KEYWORD_FAST_PATH,
         "llm": config.USE_LLM_INTENT and llm.is_available(),
-        "llm_model": config.MISTRAL_MODEL if llm.is_available() else "not configured",
+        "llm_provider": llm.provider_name(),
+        "llm_model": llm.model_name(),
     }
