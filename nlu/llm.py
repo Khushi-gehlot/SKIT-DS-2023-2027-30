@@ -101,6 +101,11 @@ def is_available() -> bool:
     return bool(requests and active_provider())
 
 
+# Which provider produced the most recent reply, for honest logging
+# when the chain has failed over.
+_last_provider: str | None = None
+
+
 def provider_name() -> str:
     found = active_provider()
     return found[0] if found else "none"
@@ -159,7 +164,15 @@ def _is_reasoning_model(model: str) -> bool:
     lowered = (model or "").lower()
     return any(
         marker in lowered
-        for marker in ("r1", "reason", "-think", "qwq", "o1", "o3", "deepseek-v3.1")
+        for marker in (
+            "r1", "reason", "-think", "qwq", "o1", "o3", "deepseek-v3.1",
+            # gpt-oss thinks before answering too, and does it in a separate
+            # "reasoning" field. With an ordinary token budget it spends the
+            # whole allowance deliberating, finishes with reason "length",
+            # and returns an empty string as the answer - which looked like
+            # a provider fault rather than a budget one.
+            "gpt-oss",
+        )
     )
 
 
@@ -258,7 +271,9 @@ def _ask_one(provider, system: str, user: str, json_mode: bool,
     Returns (answer, retryable). `retryable` says whether a different
     provider might succeed where this one did not.
     """
+    global _last_provider
     name, key, url, model = provider
+    _last_provider = name
 
     body = {
         "model": model,
@@ -276,6 +291,13 @@ def _ask_one(provider, system: str, user: str, json_mode: bool,
             else config.LLM_MAX_TOKENS
         ),
     }
+    if _is_reasoning_model(model) and config.LLM_REASONING_EFFORT:
+        # Ask the model to think less. Classification needs no deliberation,
+        # and on gpt-oss the difference is an answer in about a second
+        # against one that never arrives because the budget ran out first.
+        # Providers that do not know the field ignore it.
+        body["reasoning_effort"] = config.LLM_REASONING_EFFORT
+
     if json_mode:
         body["response_format"] = {"type": "json_object"}
 
@@ -355,7 +377,12 @@ def get_intent(text: str, source: str = "text") -> Intent:
 
     data = _extract_json(reply)
     if data is None:
-        print(f"{provider_name()} did not return JSON: {reply[:120]!r}")
+        # The provider that actually answered, not the first one configured.
+        # Reporting provider_name() here blamed whichever provider sits at
+        # the top of the chain even when it had already failed over - so a
+        # timeout on one engine was logged as a parsing fault in another.
+        print(f"{_last_provider or provider_name()} did not return JSON: "
+              f"{reply[:120]!r}")
         return Intent.unknown(raw_text=text, source=source)
 
     # Keep only what the model is allowed to decide, then add our own

@@ -48,6 +48,18 @@ CALIBRATION_SECONDS = 1.0   # ambient-noise sampling on first listen
 # trigger on nothing at all. Never go below this.
 MIN_ENERGY_THRESHOLD = 100
 
+# Pin the energy threshold and skip calibration entirely.
+#
+# Calibration measures the room at startup, so the same microphone can come
+# up at 100 in a quiet moment and 1200 in a busy one - and a value measured
+# during a lull makes the recogniser fire on every small noise, fill the
+# buffer with rubbish and report that it could not understand the audio.
+# When a value is known to work, holding it is better than re-measuring.
+#
+#     VYAS_ENERGY_THRESHOLD=1200
+_pinned = os.environ.get("VYAS_ENERGY_THRESHOLD", "").strip()
+ENERGY_THRESHOLD: float | None = float(_pinned) if _pinned else None
+
 # The recogniser adapts its threshold as it listens, which is useful, but it
 # only ever drifts upward in a room with background noise or an assistant that
 # talks through speakers. These two settings stop it going permanently deaf:
@@ -414,6 +426,12 @@ LLM_REASONING_MAX_TOKENS = int(os.environ.get("VYAS_LLM_REASONING_TOKENS", "1200
 
 # And they need longer to answer, for the same reason.
 LLM_REASONING_TIMEOUT = float(os.environ.get("VYAS_LLM_REASONING_TIMEOUT", "40"))
+
+# How hard a reasoning model should think, where the provider accepts the
+# setting. "low" on purpose: deciding which of thirty actions a sentence
+# means needs no deliberation, and the thinking is what makes these models
+# slow. Empty string to leave the provider's default alone.
+LLM_REASONING_EFFORT = os.environ.get("VYAS_LLM_REASONING_EFFORT", "low").strip()
 
 # Which provider to try first, by name: groq, gemini, mistral, huggingface
 # or ollama. Unset means the order written in nlu/llm.py. Set this to pin a

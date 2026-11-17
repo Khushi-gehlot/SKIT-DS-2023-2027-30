@@ -83,6 +83,31 @@ COMMANDS: dict[str, tuple[str, str | None]] = {
     "screen settings": ("open_settings", "display"),
     "brightness settings": ("open_settings", "display"),
 
+    # Brightness is its own action, not a kind of power command. Changing it
+    # is as harmless as changing the volume, and grouping it under power
+    # made it inherit that action's voice verification.
+    "brightness up": ("brightness", "up"),
+    "increase brightness": ("brightness", "up"),
+    "turn up the brightness": ("brightness", "up"),
+    "brighter": ("brightness", "up"),
+    "make the screen brighter": ("brightness", "up"),
+    "brighten the screen": ("brightness", "up"),
+
+    "brightness down": ("brightness", "down"),
+    "decrease brightness": ("brightness", "down"),
+    "reduce brightness": ("brightness", "down"),
+    "turn down the brightness": ("brightness", "down"),
+    "dim the screen": ("brightness", "down"),
+    "dimmer": ("brightness", "down"),
+
+    "full brightness": ("brightness", "max"),
+    "maximum brightness": ("brightness", "max"),
+    "minimum brightness": ("brightness", "min"),
+    "lowest brightness": ("brightness", "min"),
+
+    "what is the brightness": ("brightness", "status"),
+    "brightness level": ("brightness", "status"),
+
     "font settings": ("open_settings", "fonts"),
     "fonts": ("open_settings", "fonts"),
 

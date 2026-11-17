@@ -831,25 +831,34 @@ def close_named_window(name: str) -> bool:
                 print(f"  - {title}")
         return False
 
+    # Several windows of the same application are closed together.
+    #
+    # Reading their titles back and waiting was the safe reading of an
+    # ambiguous request, but it is not what people mean: "close chrome"
+    # means close Chrome, not "tell me about Chrome". Each window is still
+    # asked to close rather than killed, so anything with unsaved work
+    # prompts on its own.
     if len(matches) > 1:
-        # Several match, so say what they are rather than guessing. Closing
-        # the wrong window can lose work, and the user cannot see which one
-        # went.
-        speak(f"There are {len(matches)} windows matching {name}.")
-        for window in matches[:5]:
-            speak(window.title)
+        speak(f"Closing {len(matches)} {name} windows.")
+
+    closed = 0
+    for window in matches:
+        title = window.title
+        try:
+            window.close()
+            closed += 1
+            if len(matches) == 1:
+                speak(f"Closed {title}")
+        except Exception as e:
+            print(f"Could not close '{title}': {type(e).__name__}: {e}")
+
+    if closed == 0:
+        speak(f"I could not close {name}.")
         return False
 
-    window = matches[0]
-    title = window.title
-    try:
-        window.close()
-        speak(f"Closed {title}")
-        return True
-    except Exception as e:
-        print(f"Could not close '{title}': {type(e).__name__}: {e}")
-        speak(f"I could not close {title}.")
-        return False
+    if closed < len(matches):
+        speak(f"Closed {closed} of {len(matches)}.")
+    return True
 
 
 def say_open_windows() -> list[str]:
@@ -863,3 +872,102 @@ def say_open_windows() -> list[str]:
     for title in titles[:10]:
         speak(title)
     return titles
+
+
+# =============== SCREEN BRIGHTNESS ===============
+#
+# Windows exposes laptop panel brightness through WMI rather than through a
+# key that can be pressed, so unlike volume this cannot be done by sending a
+# media key. External monitors do not answer WMI at all - they are driven
+# over DDC/CI by their own firmware - so this works on a laptop screen and
+# reports honestly when it cannot.
+
+_BRIGHTNESS_READ = (
+    "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness "
+    "-ErrorAction Stop).CurrentBrightness"
+)
+_BRIGHTNESS_SET = (
+    "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods "
+    "-ErrorAction Stop).WmiSetBrightness(1,{level})"
+)
+
+BRIGHTNESS_STEP = 20
+
+
+def _powershell(command: str) -> str | None:
+    """Run one PowerShell command and return its output, or None."""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=12,
+        )
+    except Exception as e:
+        print(f"PowerShell failed: {type(e).__name__}: {e}")
+        return None
+
+    if result.returncode != 0:
+        print(f"PowerShell error: {result.stderr.strip()[:160]}")
+        return None
+    return result.stdout.strip()
+
+
+def get_brightness() -> int | None:
+    """Current panel brightness as a percentage, or None if unsupported."""
+    output = _powershell(_BRIGHTNESS_READ)
+    if not output:
+        return None
+    # A multi-monitor machine returns one line per panel that answers.
+    first = output.splitlines()[0].strip()
+    try:
+        return int(first)
+    except ValueError:
+        return None
+
+
+def set_brightness(level: int) -> bool:
+    """Set brightness to a percentage. Clamped to 0-100."""
+    level = max(0, min(100, int(level)))
+    if _powershell(_BRIGHTNESS_SET.format(level=level)) is None:
+        speak("I cannot change the brightness on this display.")
+        return False
+    speak(f"Brightness {level} percent.")
+    return True
+
+
+def adjust_brightness(direction: str) -> bool:
+    """
+    Step brightness up or down.
+
+    Reads the current value first rather than tracking it, because the user
+    can change it with the keyboard at any time and a remembered value would
+    drift out of step with the screen in front of them.
+    """
+    current = get_brightness()
+    if current is None:
+        speak("I cannot read the brightness on this display.")
+        return False
+
+    if direction in ("up", "increase", "brighter", "raise"):
+        target = current + BRIGHTNESS_STEP
+    elif direction in ("down", "decrease", "dimmer", "dim", "lower"):
+        target = current - BRIGHTNESS_STEP
+    elif direction == "max":
+        target = 100
+    elif direction == "min":
+        target = 10      # not 0: a black screen is indistinguishable from a
+                         # broken one, and the user may not be able to undo it
+    else:
+        speak(f"I do not know how to make the screen {direction}.")
+        return False
+
+    return set_brightness(target)
+
+
+def say_brightness() -> int | None:
+    """Report the current brightness out loud."""
+    current = get_brightness()
+    if current is None:
+        speak("I cannot read the brightness on this display.")
+        return None
+    speak(f"Brightness is {current} percent.")
+    return current

@@ -321,12 +321,23 @@ class Conversation:
         watching the screen has to say what happened - silence after a
         command is indistinguishable from the assistant being broken.
         """
+        # Most handlers already speak as they work - "Opening Notepad",
+        # "Battery level is 49 percent". Announcing the result on top of
+        # that said everything twice, in two different wordings, which is
+        # confusing rather than merely redundant for someone who is
+        # listening rather than reading.
+        #
+        # So: speak the result only when nothing else did.
+        before = core.speech_count()
+
         result = handle_recognised(text, audio=audio, source="voice")
 
         if result.needs_confirmation and result.intent is not None:
             result = self._confirm(result, audio=audio)
 
-        self._say(result.message if result.message else core.acknowledgement())
+        if core.speech_count() == before:
+            self._say(result.message or core.acknowledgement())
+
         self._report(text, result.message, result.success)
 
     def _confirm(self, result: ExecutionResult, audio=None) -> ExecutionResult:

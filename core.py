@@ -51,10 +51,23 @@ except ImportError:
 _speech_lock = threading.Lock()
 
 
+# How many things have been said. Callers use it to tell whether anything
+# spoke during a piece of work, which is how the conversation loop avoids
+# announcing a result the action has already announced itself.
+_spoken_count = 0
+
+
+def speech_count() -> int:
+    """Number of utterances spoken so far this run."""
+    return _spoken_count
+
+
 def speak(text: str):
     """Speak text out loud and also print it (safe for multi-threaded use)."""
+    global _spoken_count
     print("Assistant:", text)
     with _speech_lock:
+        _spoken_count += 1
         _speak_now(text)
 
 
@@ -84,13 +97,14 @@ def _speak_now(text: str):
     # otherwise the tail of this sentence lands in the next recording.
     time.sleep(config.SPEAK_SETTLE_SECONDS)
 
-    # Then throw away everything the microphone captured while we talked.
+    # Deliberately no longer drains the microphone here.
     #
-    # This matters now the microphone is held open: the stream buffers
-    # continuously, so without draining it the next listen() reads back the
-    # assistant's own voice, and the wake-word model scores audio the
-    # assistant produced itself.
-    drain_mic()
+    # Draining after speaking was meant to stop the assistant hearing its
+    # own voice, and it does - but the buffer refills as fast as it is
+    # emptied, so the drain also swallowed the beginning of a reply that
+    # started promptly. Users talk over the end of a sentence constantly,
+    # and losing their first words is worse than occasionally catching the
+    # tail of ours, which SPEAK_SETTLE_SECONDS already covers.
 
 
 # =============== WAKE WORD ===============
@@ -443,6 +457,17 @@ def wait_for_wake_word(
 def calibrate(duration: float = config.CALIBRATION_SECONDS):
     """Learn the room's noise floor. Called automatically on first listen."""
     global _calibrated, _listens_since_calibration
+
+    # A pinned threshold is never re-measured. Re-measuring is what makes
+    # the same microphone behave differently from one run to the next.
+    if config.ENERGY_THRESHOLD is not None:
+        _recognizer.energy_threshold = config.ENERGY_THRESHOLD
+        print(f"Mic threshold pinned at {config.ENERGY_THRESHOLD:.0f} "
+              "(calibration skipped)")
+        _calibrated = True
+        _listens_since_calibration = 0
+        return
+
     try:
         source = _get_source()
         _recognizer.adjust_for_ambient_noise(source, duration=duration)
@@ -484,8 +509,11 @@ def listen(
         calibrate()
 
     # Keep the threshold inside a sane band whatever happened to it. Too low
-    # and it records silence; too high and it ignores speech.
-    if _recognizer.energy_threshold < config.MIN_ENERGY_THRESHOLD:
+    # and it records silence; too high and it ignores speech. A pinned value
+    # is left alone - the point of pinning it is that it does not move.
+    if config.ENERGY_THRESHOLD is not None:
+        _recognizer.energy_threshold = config.ENERGY_THRESHOLD
+    elif _recognizer.energy_threshold < config.MIN_ENERGY_THRESHOLD:
         _recognizer.energy_threshold = config.MIN_ENERGY_THRESHOLD
     elif _recognizer.energy_threshold > config.MAX_ENERGY_THRESHOLD:
         _recognizer.energy_threshold = config.MAX_ENERGY_THRESHOLD

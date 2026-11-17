@@ -22,31 +22,39 @@ import numpy as np
 import config
 import voiceprint_store
 
-try:
-    from resemblyzer import VoiceEncoder, preprocess_wav
-    RESEMBLYZER_AVAILABLE = True
-except ImportError:
-    VoiceEncoder = preprocess_wav = None
-    RESEMBLYZER_AVAILABLE = False
-
+# Resemblyzer is NOT imported here.
+#
+# Importing it pulls in torch, which costs about six seconds - paid by every
+# start of the app, including the majority where nobody enrols or verifies
+# anything. Whether the library exists is answered by looking for it on the
+# import path, which costs nothing, and the import itself is deferred to the
+# first call that genuinely needs the model.
+preprocess_wav = None
 
 # Loading the model takes a few seconds, so do it once, lazily: the app must
 # start instantly even if nobody ever enrols.
-_encoder: "VoiceEncoder | None" = None
+_encoder = None
 
 
 def is_available() -> bool:
-    return RESEMBLYZER_AVAILABLE
+    """Whether Resemblyzer is installed, without importing it."""
+    import importlib.util
+    return importlib.util.find_spec("resemblyzer") is not None
 
 
 def _get_encoder():
-    global _encoder
+    global _encoder, preprocess_wav
     if _encoder is not None:
         return _encoder
-    if not RESEMBLYZER_AVAILABLE:
+
+    try:
+        from resemblyzer import VoiceEncoder, preprocess_wav as _preprocess
+    except ImportError:
         raise RuntimeError(
             "Resemblyzer is not installed. Run: pip install resemblyzer"
-        )
+        ) from None
+
+    preprocess_wav = _preprocess
     print("Loading speaker encoder... (first run only)")
     _encoder = VoiceEncoder()
     print("Speaker encoder ready.")

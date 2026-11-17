@@ -45,6 +45,9 @@ _PARAMS = {
     "browser_button": '"button" = the wording on the button, or null to press '
                       'the form\'s submit button.',
     "close_app": '"app" = the name of the window or program to close.',
+    "brightness": '"level" = a percentage 0-100, only when the user names a '
+                  'number ("set brightness to 40"). Otherwise omit it and use '
+                  'the target.',
 }
 
 _NOTES = {
@@ -80,6 +83,14 @@ _NOTES = {
                  'shutting the machine down is the "power" action.',
     "list_windows": 'reads out which windows are open, so the user can name '
                     'one.',
+    "brightness": 'screen brightness. Anything about the screen being too '
+                  'bright, too dark, dim or hard to see belongs here. Never '
+                  'use the "power" action for brightness - power is for '
+                  'shutting down, restarting, sleeping and locking only.',
+    "power": 'shutting down, restarting, sleeping, locking or signing out of '
+             'the machine. Nothing else. This is checked against the user\'s '
+             'voice before it runs, so putting an ordinary request here '
+             'demands verification for no reason.',
 }
 
 
