@@ -37,15 +37,21 @@ import numpy as np
 
 import config
 
-try:
-    from openwakeword.model import Model
-    OPENWAKEWORD_AVAILABLE = True
-except ImportError:
-    Model = None
-    OPENWAKEWORD_AVAILABLE = False
+# openWakeWord is NOT imported here.
+#
+# Importing it loads onnxruntime, which costs several seconds at every
+# start of the app - paid even by a user who only ever presses the button.
+# Whether it is installed is answered by looking for it on the import path,
+# and the import itself happens when the model is first loaded.
+def _openwakeword_installed() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("openwakeword") is not None
 
 
-_model: "Model | None" = None
+OPENWAKEWORD_AVAILABLE = _openwakeword_installed()
+
+
+_model = None           # an openwakeword Model once loaded
 _lock = threading.Lock()
 _load_error: str | None = None
 
@@ -84,6 +90,8 @@ def get_model():
             _load_error = "openwakeword is not installed (pip install openwakeword)"
             return None
         try:
+            from openwakeword.model import Model
+
             print(f"Loading wake-word model '{config.WAKE_MODEL}'...")
             _model = Model(
                 wakeword_models=[config.WAKE_MODEL],

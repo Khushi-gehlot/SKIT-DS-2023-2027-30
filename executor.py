@@ -418,6 +418,38 @@ def _browser_submit(intent: Intent) -> ExecutionResult:
     )
 
 
+@handler("brightness")
+def _brightness(intent: Intent) -> ExecutionResult:
+    """
+    Change the screen brightness.
+
+    Deliberately its own action rather than a target of "power". Without it
+    the LLM had nowhere correct to put "dim the screen" and chose
+    power/brightness - which is flagged sensitive, so a harmless request for
+    a dimmer screen demanded voice verification and then did nothing.
+    """
+    target = (intent.target or "").lower()
+    level = intent.params.get("level")
+
+    if level is not None:
+        try:
+            ok = actions.set_brightness(int(level))
+        except (TypeError, ValueError):
+            return ExecutionResult.fail(f"'{level}' is not a brightness.", intent)
+        return (
+            ExecutionResult.ok(f"Brightness {level}%.", intent) if ok
+            else ExecutionResult.fail("Could not set the brightness.", intent)
+        )
+
+    if target in ("", "status", "level", "current"):
+        current = actions.say_brightness()
+        return ExecutionResult.ok(f"Brightness {current}%.", intent, data=current)
+
+    if actions.adjust_brightness(target):
+        return ExecutionResult.ok(f"Brightness {target}.", intent)
+    return ExecutionResult.fail("Could not change the brightness.", intent)
+
+
 @handler("close_app")
 def _close_app(intent: Intent) -> ExecutionResult:
     """
